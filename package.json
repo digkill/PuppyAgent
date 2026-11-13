@@ -1,0 +1,14 @@
+{
+  "name": "puppy-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A friendly, persistent coding agent with a pack of helper puppies.",
+  "engines": { "node": ">=22.15.0" },
+  "scripts": {
+    "start": "node --experimental-strip-types src/cli.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": { "@types/node": "^22.15.0", "typescript": "~5.8.3" }
+}

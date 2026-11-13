@@ -1,0 +1,57 @@
+{
+  "language": "en",
+  "provider": "kie",
+  "providers": {
+    "kie": {
+      "protocol": "anthropic",
+      "baseUrl": "https://api.kie.ai/claude/v1",
+      "modelsUrl": "https://api.kie.ai/anthropic/v1/models",
+      "auth": "bearer",
+      "apiKeyEnv": "KIE_API_KEY",
+      "model": "claude-opus-5-5",
+      "stream": true,
+      "promptCache": "off",
+      "maxTaskCredits": 10
+    },
+    "anthropic": {
+      "protocol": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "auth": "x-api-key",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "model": "claude-opus-5-5",
+      "stream": true,
+      "promptCache": "5m",
+      "pricing": {
+        "inputUsdPerMTok": 4,
+        "outputUsdPerMTok": 20,
+        "cacheReadUsdPerMTok": 0.2,
+        "cacheWrite5mUsdPerMTok": 5,
+        "cacheWrite1hUsdPerMTok": 8,
+        "source": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+        "asOf": "2026-11-14"
+      }
+    },
+    "openai-compatible": {
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.openai.com/v1",
+      "auth": "bearer",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "model": "REPLACE_WITH_MODEL_ID"
+    }
+  },
+  "tmpDir": "/Volumes/Data/CodexTemp/puppy-agent",
+  "dataDir": "~/.local/share/puppy-agent",
+  "permissionMode": "ask",
+  "maxSteps": 40,
+  "maxPackCalls": 80,
+  "maxChildren": 6,
+  "maxParallelChildren": 3,
+  "maxDepth": 2,
+  "maxOutputTokens": 4096,
+  "contextBudgetTokens": 48000,
+  "requestTimeoutMs": 120000,
+  "commandTimeoutMs": 60000,
+  "maxToolOutputChars": 24000,
+  "instructions": "Be friendly, precise, and finish the user's task. Verify changes before reporting success.",
+  "instructionFiles": []
+}
