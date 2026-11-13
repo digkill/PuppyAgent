@@ -43,14 +43,13 @@ async function main(): Promise<void> {
   loadEnvironment();
   const command = positionals[0] || 'chat';
   if (command === 'init') {
-    if (!values.tmp) throw new Error('Pass --tmp /absolute/temp/path.');
     const lang = requestedLanguage || 'en';
     print(`${t(lang, 'created')} ${await initConfig(values.tmp, lang)}\n${t(lang, 'configure')}`);
     return;
   }
   if (command === 'config') { print(configPath()); return; }
   if (!['models', 'chat', 'run', 'resume', 'sessions', 'usage'].includes(command)) throw new Error(`Unknown command: ${command}\n${helpText(requestedLanguage || 'en')}`);
-  const cfg = await loadConfig();
+  const cfg = await loadConfig(values.tmp);
   if (requestedLanguage) cfg.language = requestedLanguage;
   if (values.provider) {
     if (!cfg.providers[values.provider]) throw new Error('Unknown provider.');

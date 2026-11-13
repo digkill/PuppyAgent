@@ -15,7 +15,8 @@ This is the first working CLI core. It has **no runtime package dependencies**: 
 No package installation is needed to run:
 
 ```bash
-npm start -- init --tmp /absolute/path/to/puppy-temp
+# First set PUPPY_TMP_DIR in Puppy's root .env (see .env.example).
+npm start -- init
 npm start -- config
 ```
 
@@ -23,6 +24,7 @@ Open the printed config file. See [puppy.config.example.json](puppy.config.examp
 
 ```dotenv
 KIE_API_KEY=your-key
+PUPPY_TMP_DIR=/Volumes/Data/CodexTemp/puppy-agent
 ```
 
 Then launch:
@@ -166,6 +168,8 @@ After restoring a parent session, `list_puppies` and `wait_puppies` can retrieve
 ## Temporary work
 
 `tmpDir` is required. There is no silent system-temp fallback. Each launch creates `run-UUID` and sets `TMPDIR`, `TMP`, `TEMP`, npm cache, XDG cache, and Python bytecode paths to it. Missing `/Volumes/<name>` mounts fail explicitly. Programs ignoring environment variables require explicit output/cache arguments; arbitrary shell programs are not forcibly redirected without an OS sandbox.
+
+Set `PUPPY_TMP_DIR` in Puppy's `.env` to use the same location for setup and subsequent launches without `--tmp`. Priority: explicit `--tmp` flag, then `PUPPY_TMP_DIR`, then `tmpDir` in config. Changes in `.env` take effect on the next launch, including restored sessions. Initialization stores the selected path in config.
 
 The launch folder is removed on normal exit, while the SQL database is retained. After a hard kill, leftover launch folders may be removed manually. Put final deliverables outside the disposable directory.
 

@@ -513,7 +513,7 @@ test('CLI runs with a mocked API transport, persists sessions and removes runtim
     `);
     const path = join(f.root, 'config.json');
     await writeFile(path, JSON.stringify({ ...f.config, language: 'ru', permissionMode: 'workspace-write', providers: { test: { ...providerCfg, stream: true, maxTaskCredits: 10 } } }));
-    const env = { PUPPY_CONFIG: path, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
+    const env = { PUPPY_CONFIG: path, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
     const result = await cli(['run', 'write a greeting'], env, f.workspace);
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /Готово/);

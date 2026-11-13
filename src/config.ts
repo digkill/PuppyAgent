@@ -69,14 +69,21 @@ function validateProviderUrl(value: string, name: string): void {
   if (url.username || url.password || url.search || url.hash) throw new Error(`Provider ${name}: put credentials in environment variables, not the URL.`);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error(`Provider ${name} requires HTTPS (except localhost).`);
 }
-export async function loadConfig(): Promise<Config> {
-  try { return validateConfig(JSON.parse(await readFile(configPath(), 'utf8'))); }
+export async function loadConfig(tmpDir = process.env.PUPPY_TMP_DIR): Promise<Config> {
+  try {
+    const raw: unknown = JSON.parse(await readFile(configPath(), 'utf8'));
+    if (tmpDir !== undefined && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      (raw as Record<string, unknown>).tmpDir = tmpDir;
+    }
+    return validateConfig(raw);
+  }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`No config at ${configPath()}. Run: npm start -- init --tmp /absolute/temp/path`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`No config at ${configPath()}. Run: npm start -- init (set PUPPY_TMP_DIR in .env or pass --tmp /absolute/temp/path).`);
     throw error;
   }
 }
-export async function initConfig(tmpDir: string, language: Language = 'en'): Promise<string> {
+export async function initConfig(tmpDir = process.env.PUPPY_TMP_DIR || '', language: Language = 'en'): Promise<string> {
+  if (!tmpDir) throw new Error('Set PUPPY_TMP_DIR in .env or pass --tmp /absolute/temp/path.');
   const cfg = validateConfig({ ...defaults, tmpDir, language });
   const path = configPath();
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

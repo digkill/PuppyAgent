@@ -34,7 +34,7 @@ export function language(value: string): Language {
 }
 export function helpText(lang: Language): string {
   const commands = `
-  npm start -- init --tmp /absolute/temp/path [--language en|ru]
+  npm start -- init [--tmp /absolute/temp/path] [--language en|ru]
   npm start -- models [--provider name]
   npm start -- chat [--new] [--cwd path] [--provider name] [--permission mode] [--language en|ru]
   npm start -- run "task" [--cwd path] [--permission mode] [--language en|ru]
