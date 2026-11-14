@@ -121,7 +121,7 @@ export class Tools {
         const command = str(input, 'command', 20000);
         const timeout = integer(input, 'timeoutMs', this.config.commandTimeoutMs, this.config.commandTimeoutMs);
         await this.permissions.check({ action: 'shell', target: s.cwd, detail: command });
-        return await runCommand(command, s.cwd, this.tmpDir, timeout, this.config.maxToolOutputChars, this.signal, Object.values(this.config.providers).map(p => p.apiKeyEnv));
+        return await runCommand(command, s.cwd, this.tmpDir, timeout, this.config.maxToolOutputChars, this.signal, Object.values(this.config.providers).map(p => p.apiKeyEnv).concat('ARGO_LINK_API_KEY', 'ARGOLINK_API_KEY'));
       }
       case 'change_directory': {
         const path = await canonicalPath(resolve(s.cwd, str(input, 'path')));

@@ -30,8 +30,8 @@ test('model and effort environment defaults are validated without mutating provi
     process.env.PUPPY_MODEL = 'claude-opus-5-5'; process.env.PUPPY_EFFORT = 'high';
     const original = validateConfig({ ...defaults, tmpDir: base });
     const selected = environmentDefaults(original);
-    assert.equal(selected.providers.kie.effort, 'high');
-    assert.equal(original.providers.kie.effort, undefined);
+    assert.equal(selected.providers[selected.provider].effort, 'high');
+    assert.equal(original.providers[original.provider].effort, undefined);
     for (const effort of EFFORTS) assert.equal(parseEffort(effort), effort);
     assert.throws(() => parseEffort('ultra'));
     process.env.PUPPY_EFFORT = 'invalid';

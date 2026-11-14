@@ -168,3 +168,58 @@ test('memory-disabled compaction keeps a separate task checkpoint and retains fu
     assert.equal(f.store.messages(f.session.id).length, 15);
   } finally { await f.cleanup(); }
 });
+
+test('Argolink uses native Claude messages, cache blocks, correct model prices and no Kie credit limit', async () => {
+  const cfg = defaults.providers.argolink;
+  assert.equal(cfg.apiKeyEnv, 'ARGO_LINK_API_KEY');
+  assert.equal(cfg.maxTaskCredits, undefined, 'USD wallet is not a Kie credit allowance');
+  const sonnet = routeProvider(cfg, 'claude-sonnet-5-5', 'high');
+  assert.equal(sonnet.protocol, 'anthropic');
+  assert.equal(sonnet.pricing?.inputUsdPerMTok, 0.7);
+  assert.equal(routeProvider(cfg, 'claude-fable-5-2').pricing?.outputUsdPerMTok, 14);
+  assert.equal(routeProvider(cfg, 'unknown-claude-model').pricing, undefined);
+  const previous = process.env.ARGO_LINK_API_KEY;
+  process.env.ARGO_LINK_API_KEY = 'fixture-not-a-real-key';
+  try {
+    const provider = new HttpProvider({ ...cfg, effort: 'high', stream: false }, 1000, async (url, init) => {
+      assert.equal(url, 'https://argolink.io/v1/messages');
+      assert.equal((init!.headers as Record<string, string>)['x-api-key'], 'fixture-not-a-real-key');
+      const body = JSON.parse(init!.body as string);
+      assert.deepEqual(body.output_config, { effort: 'high' });
+      assert.deepEqual(body.system, [{ type: 'text', text: 'system', cache_control: { type: 'ephemeral', ttl: '5m' } }]);
+      assert.equal(body.cache_control, undefined); assert.equal(body.thinking, undefined);
+      return Response.json({ role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'list_files', input: { path: '.' } }], stop_reason: 'tool_use', usage: { input_tokens: 5, output_tokens: 8, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+    });
+    const result = await provider.complete({ system: 'system', messages: [{ role: 'user', content: [{ type: 'text', text: 'List files' }] }], tools: [{ name: 'list_files', description: 'List', input_schema: { type: 'object' } }], maxTokens: 4096 });
+    assert.equal(result.message.content[0].type, 'tool_use');
+    assert.equal(result.metrics?.creditsConsumed, null);
+  } finally { if (previous === undefined) delete process.env.ARGO_LINK_API_KEY; else process.env.ARGO_LINK_API_KEY = previous; }
+});
+
+test('Argolink auth failures expose only known codes and a request ID, preserving unknown billing', async () => {
+  const id = '12345678-1234-1234-1234-123456789abc';
+  const provider = new HttpProvider({ ...defaults.providers.argolink, auth: 'none' }, 1000, async () => Response.json({ code: 'INVALID_API_KEY', message: 'untrusted sensitive body' }, { status: 401, headers: { 'X-Client-Request-ID': id } }));
+  await assert.rejects(provider.complete({ system: 's', messages: [], tools: [], maxTokens: 4096 }), error => {
+    assert.ok(error instanceof ProviderFailure);
+    assert.match(error.message, /401 \(INVALID_API_KEY\)/);
+    assert.ok(!error.message.includes('sensitive'));
+    assert.equal(error.metrics.clientRequestId, id);
+    assert.equal(error.metrics.creditsConsumed, null);
+    return true;
+  });
+});
+
+test('Argolink environment override discards another model tariff and supports the documented key alias', () => {
+  const names = ['ARGO_LINK_API_KEY', 'ARGOLINK_API_KEY', 'PUPPY_PROVIDER', 'PUPPY_MODEL'];
+  const saved = Object.fromEntries(names.map(key => [key, process.env[key]]));
+  try {
+    delete process.env.ARGO_LINK_API_KEY;
+    process.env.ARGOLINK_API_KEY = 'not-a-real-key';
+    process.env.PUPPY_PROVIDER = 'argolink';
+    process.env.PUPPY_MODEL = 'claude-sonnet-5-5';
+    const cfg = environmentDefaults(validateConfig({ ...defaults, tmpDir: base, providers: { argolink: { ...defaults.providers.argolink, pricing: { inputUsdPerMTok: 999 } } } }));
+    assert.equal(cfg.providers.argolink.apiKeyEnv, 'ARGOLINK_API_KEY');
+    assert.equal(cfg.providers.argolink.pricing, undefined);
+    assert.equal(routeProvider(cfg.providers.argolink).pricing?.inputUsdPerMTok, 0.7);
+  } finally { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+});

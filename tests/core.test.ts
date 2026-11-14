@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, stat, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, stat, readdir, chmod } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { cleanupRuntime } from '../src/temp.ts';
 import { Store } from '../src/store.ts';
 import { canonicalPath, Permissions } from '../src/permissions.ts';
 import { defaults, prepareRuntime, validateConfig } from '../src/config.ts';
@@ -42,8 +43,8 @@ test('config has English default, requires explicit temp, validates limits and p
   assert.throws(() => validateConfig({ tmpDir: base, language: 'de' }), /language/);
   assert.throws(() => validateConfig({ tmpDir: base, maxSteps: -1 }), /maxSteps/);
   assert.throws(() => validateConfig({ tmpDir: base, permissionMode: 'magic' }), /permissionMode/);
-  assert.throws(() => validateConfig({ tmpDir: base, providers: { kie: { ...providerCfg, baseUrl: 'http://remote.example/v1' } } }), /HTTPS/);
-  assert.throws(() => validateConfig({ tmpDir: base, providers: { kie: { ...providerCfg, baseUrl: 'https://user:pass@example.com' } } }), /credentials/);
+  assert.throws(() => validateConfig({ tmpDir: base, provider: 'kie', providers: { kie: { ...providerCfg, baseUrl: 'http://remote.example/v1' } } }), /HTTPS/);
+  assert.throws(() => validateConfig({ tmpDir: base, provider: 'kie', providers: { kie: { ...providerCfg, baseUrl: 'https://user:pass@example.com' } } }), /credentials/);
 });
 
 test('runtime uses configured temp variables and cleans its isolated folder', async () => {
@@ -412,7 +413,7 @@ test('an instruction-file symlink cannot silently include data outside the works
   } finally { await f.cleanup(); }
 });
 
-test('compaction keeps original transcript and complete tool pairs', async () => {
+test('compaction accepts signed thinking while keeping original transcript and complete tool pairs', async () => {
   const f = await fixture();
   try {
     for (let turn = 0; turn < 4; turn++) {
@@ -425,7 +426,7 @@ test('compaction keeps original transcript and complete tool pairs', async () =>
     const split = compactionSplit(before)!;
     assert.equal(split.recent[0].content[0].type, 'text');
     const agent = new PuppyAgent({ config: f.config, store: f.store, tmpDir: f.tmpDir, approve: async () => false });
-    await agent.compact(f.store.get(f.session.id), fake(() => text('Summary of earlier tasks.')), true);
+    await agent.compact(f.store.get(f.session.id), fake(() => response([{ type: 'thinking', thinking: 'Summarizing the earlier turns.', signature: 'signed-summary-reasoning' }, { type: 'text', text: 'Summary of earlier tasks.' }])), true);
     assert.equal(f.store.messages(f.session.id).length, before.length);
     assert.equal(f.store.get(f.session.id).summary, 'Summary of earlier tasks.');
     assert.equal(f.store.messages(f.session.id, f.store.get(f.session.id).summaryThrough).length, 8);
@@ -557,4 +558,23 @@ test('CLI runs with a mocked API transport, persists sessions and removes runtim
   } finally {
     await f.cleanup();
   }
+});
+
+test('runtime cleanup removes read-only module caches without following directory symlinks', async () => {
+  const f = await fixture();
+  const runtime = join(f.tmpDir, 'run-readonly');
+  const cache = join(runtime, 'modules', 'dependency');
+  const outside = join(f.workspace, 'outside-cache');
+  try {
+    await mkdir(cache, { recursive: true }); await mkdir(outside, { mode: 0o750 });
+    await writeFile(join(cache, 'source.go'), 'package dependency', { mode: 0o444 });
+    await writeFile(join(outside, 'preserve.txt'), 'preserve');
+    await symlink(outside, join(runtime, 'external-link'));
+    const outsideMode = (await stat(outside)).mode;
+    await chmod(cache, 0o555);
+    await cleanupRuntime(runtime);
+    await assert.rejects(stat(runtime), { code: 'ENOENT' });
+    assert.equal(await readFile(join(outside, 'preserve.txt'), 'utf8'), 'preserve');
+    assert.equal((await stat(outside)).mode, outsideMode);
+  } finally { await cleanupRuntime(runtime); await f.cleanup(); }
 });

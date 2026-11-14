@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { realpath, stat, rm, chmod, readFile } from 'node:fs/promises';
+import { realpath, stat, chmod, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { configPath, initConfig, loadConfig, MODES, prepareRuntime } from './config.ts';
 import { Store } from './store.ts';
@@ -9,13 +9,14 @@ import { PuppyAgent } from './agent.ts';
 import { HttpProvider } from './provider.ts';
 import { helpText, language, t } from './i18n.ts';
 import { renderMascot } from './mascot.ts';
-import { summarizeUsage, usageText } from './usage.ts';
+import { summarizeUsage, usageText, estimateUsd } from './usage.ts';
 import { loadEnvironment } from './env.ts';
 import { EFFORTS, parseEffort, parseModel } from './model-settings.ts';
 import { sanitizeTerminal } from './terminal-markdown.ts';
+import { cleanupRuntime } from './temp.ts';
 import { AssistantOutput } from './terminal-output.ts';
-import { routeProvider } from './provider-routing.ts';
-import type { Language, PermissionMode, Session } from './types.ts';
+import { isArgolink, routeProvider } from './provider-routing.ts';
+import type { Language, PermissionMode, Session, TokenUsage } from './types.ts';
 import type { PermissionRequest } from './permissions.ts';
 
 // Do not allow model/file output to inject terminal escape sequences or carriage returns.
@@ -69,7 +70,11 @@ async function main(): Promise<void> {
     if (!cfg.providers[values.provider]) throw new Error('Unknown provider.');
     cfg.provider = values.provider;
   }
-  if (values.model) cfg.providers[cfg.provider].model = parseModel(values.model);
+  if (values.model) {
+    const model = parseModel(values.model);
+    if (model !== cfg.providers[cfg.provider].model) delete cfg.providers[cfg.provider].pricing;
+    cfg.providers[cfg.provider].model = model;
+  }
   if (values.effort) cfg.providers[cfg.provider].effort = parseEffort(values.effort);
   if (values.permission) cfg.permissionMode = mode(values.permission);
   if (command === 'models') {
@@ -151,7 +156,11 @@ async function main(): Promise<void> {
       }
       if (event.type === 'usage') {
         const tokens = detail.usage as Record<string, unknown>;
-        output.notice(`\n${prefix} cache read=${tokens.cacheReadInputTokens ?? '?'} write=${tokens.cacheCreationInputTokens ?? '?'} · credits=${detail.creditsConsumed ?? '?'} · task=${detail.taskCredits}/${detail.creditLimit ?? '∞'}`);
+        if (isArgolink(cfg.providers[session.provider])) {
+          const price = routeProvider(cfg.providers[session.provider], session.model, session.effort).pricing;
+          const usd = estimateUsd(tokens as TokenUsage, price);
+          output.notice(`\n${prefix} cache read=${tokens.cacheReadInputTokens ?? '?'} write=${tokens.cacheCreationInputTokens ?? '?'} · request USD≈${usd === null ? '?' : usd.toFixed(6)} · calls left=${active?.callsRemaining ?? '?'}`);
+        } else output.notice(`\n${prefix} cache read=${tokens.cacheReadInputTokens ?? '?'} write=${tokens.cacheCreationInputTokens ?? '?'} · credits=${detail.creditsConsumed ?? '?'} · task=${detail.taskCredits}/${detail.creditLimit ?? '∞'}`);
       }
       if (event.type === 'tool_start') output.notice(`${prefix} → ${detail.name}`);
       if (event.type === 'puppy_spawned') output.notice(`${prefix} ${t(session.language, 'helper')} ${detail.name}: ${detail.id}`);
@@ -307,7 +316,7 @@ async function main(): Promise<void> {
     if (active) await active.drain();
     rl?.close();
     store?.close();
-    await rm(tmpDir, { recursive: true, force: true });
+    await cleanupRuntime(tmpDir);
   }
 }
 function listSessions(store: Store, lang: Language, cwd?: string): void {

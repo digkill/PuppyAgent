@@ -9,9 +9,10 @@ export const MODES: PermissionMode[] = ['read-only', 'ask', 'workspace-write', '
 export const defaults: Config = {
   conversationMemory: true, functionCalling: true,
   language: 'en',
-  provider: 'kie',
+  provider: 'argolink',
   providers: {
     kie: { protocol: 'anthropic', baseUrl: 'https://api.kie.ai/claude/v1', modelsUrl: 'https://api.kie.ai/anthropic/v1/models', auth: 'bearer', apiKeyEnv: 'KIE_API_KEY', model: 'claude-opus-5-5', fallbackModel: 'claude-sonnet-5-5', stream: true, promptCache: 'off', maxTaskCredits: 10 },
+    argolink: { protocol: 'anthropic', baseUrl: 'https://argolink.io/v1', modelsUrl: 'https://argolink.io/v1/models', auth: 'x-api-key', apiKeyEnv: 'ARGO_LINK_API_KEY', model: 'claude-opus-5-5', fallbackModel: 'claude-sonnet-5-5', stream: true, promptCache: '5m', supportsTools: true },
     ollama: { protocol: 'openai-chat', baseUrl: 'http://127.0.0.1:11434/v1', auth: 'none', apiKeyEnv: '', model: '', effort: 'auto', supportsEffort: false, stream: true, maxTokensParameter: 'max_tokens' },
     lmstudio: { protocol: 'openai-chat', baseUrl: 'http://127.0.0.1:1234/v1', auth: 'none', apiKeyEnv: '', model: '', effort: 'auto', supportsEffort: false, stream: true, maxTokensParameter: 'max_tokens' },
   },
@@ -110,7 +111,12 @@ export function environmentDefaults(config: Config): Config {
   if (process.env.PUPPY_PROVIDER !== undefined) cfg.provider = process.env.PUPPY_PROVIDER;
   if (!cfg.providers[cfg.provider]) throw new Error(`Unknown PUPPY_PROVIDER: ${cfg.provider}`);
   const selected = cfg.providers[cfg.provider];
-  if (process.env.PUPPY_MODEL !== undefined) selected.model = parseModel(process.env.PUPPY_MODEL);
+  if (selected.apiKeyEnv === 'ARGO_LINK_API_KEY' && !process.env.ARGO_LINK_API_KEY && process.env.ARGOLINK_API_KEY) selected.apiKeyEnv = 'ARGOLINK_API_KEY';
+  if (process.env.PUPPY_MODEL !== undefined) {
+    const model = parseModel(process.env.PUPPY_MODEL);
+    if (model !== selected.model) delete selected.pricing;
+    selected.model = model;
+  }
   if (process.env.PUPPY_FALLBACK_MODEL !== undefined) selected.fallbackModel = parseModel(process.env.PUPPY_FALLBACK_MODEL);
   else if (selected.fallbackModel === undefined && new URL(selected.baseUrl).hostname === 'api.kie.ai') selected.fallbackModel = 'claude-sonnet-5-5';
   if (process.env.PUPPY_EFFORT !== undefined) selected.effort = parseEffort(process.env.PUPPY_EFFORT);

@@ -1,9 +1,17 @@
 import type { Block, Completion, CompletionRequest, JsonObject, Message, Provider, ProviderConfig, RequestMetrics } from './types.ts';
 import { count, metricsFromResponse } from './usage.ts';
 import { sse } from './sse.ts';
-import { checkEffort, isKie, KIE_GEMINI_MODELS, routeProvider } from './provider-routing.ts';
+import { checkEffort, isArgolink, isKie, KIE_GEMINI_MODELS, routeProvider } from './provider-routing.ts';
 
 type Fetch = typeof globalThis.fetch;
+function clientRequestId(response: Response): string | null {
+  const value = response.headers.get('x-client-request-id');
+  return value && /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|req_[A-Za-z0-9_-]{1,100})$/i.test(value) ? value : null;
+}
+class HttpFailure extends Error {
+  clientRequestId: string | null;
+  constructor(message: string, id: string | null) { super(message); this.clientRequestId = id; }
+}
 function object(value: unknown, label: string): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label} from provider.`);
   return value as JsonObject;
@@ -82,8 +90,16 @@ export class HttpProvider implements Provider {
     }
     if (!response.ok) {
       // Provider bodies may echo secrets or full prompts. Do not persist or print them.
-      await response.body?.cancel();
-      throw new Error(`Provider HTTP ${response.status}. Check endpoint, model, balance and provider logs. Request was not automatically retried.`);
+      let code = '';
+      if (isArgolink(cfg)) {
+        try {
+          const body = await response.json() as JsonObject;
+          const allowed = ['API_KEY_REQUIRED', 'INVALID_API_KEY', 'API_KEY_DISABLED', 'API_KEY_EXPIRED', 'ACCESS_DENIED', 'API_KEY_READ_ONLY', 'INSUFFICIENT_BALANCE', 'API_KEY_QUOTA_EXHAUSTED', 'RATE_LIMITED'];
+          if (typeof body.code === 'string' && allowed.includes(body.code)) code = ` (${body.code})`;
+        } catch { /* Never echo untrusted provider text. */ }
+      } else await response.body?.cancel();
+      const id = clientRequestId(response);
+      throw new HttpFailure(`Provider HTTP ${response.status}${code}.${id ? ` Request ID: ${id}.` : ''} Check endpoint, model, balance and provider logs. Request was not automatically retried.`, id);
     }
     return response;
   }
@@ -105,19 +121,22 @@ export class HttpProvider implements Provider {
     const started = performance.now();
     let res: JsonObject = {};
     let streamed = false;
-    const metrics = () => metricsFromResponse(res, this.config.protocol, this.config.model, Math.round(performance.now() - started), streamed);
+    let requestId: string | null = null;
+    const metrics = () => ({ ...metricsFromResponse(res, this.config.protocol, this.config.model, Math.round(performance.now() - started), streamed), clientRequestId: requestId });
     try {
     this.assertCompatible(req);
     if (!this.config.model || this.config.model.startsWith('REPLACE_')) throw new Error('Set an actual model ID in your provider config. Use: puppy models');
     if (this.config.protocol === 'anthropic') {
       const raw = await this.http('messages', {
-        model: this.config.model, max_tokens: req.maxTokens, system: req.system,
+        model: this.config.model, max_tokens: req.maxTokens,
+        system: isArgolink(this.config) && this.config.promptCache && this.config.promptCache !== 'off' ? [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral', ttl: this.config.promptCache } }] : req.system,
         stream: Boolean(this.config.stream),
         ...(this.config.effort && this.config.effort !== 'auto' ? { output_config: { effort: this.config.effort } } : {}),
-        ...(this.config.promptCache && this.config.promptCache !== 'off' ? { cache_control: { type: 'ephemeral', ttl: this.config.promptCache } } : {}),
+        ...(!isArgolink(this.config) && this.config.promptCache && this.config.promptCache !== 'off' ? { cache_control: { type: 'ephemeral', ttl: this.config.promptCache } } : {}),
         messages: anthropicHistory(req.messages),
         ...(req.tools.length ? { tools: req.tools } : {}),
       }, req.signal);
+      requestId = clientRequestId(raw);
       if (raw.headers.get('content-type')?.includes('text/event-stream')) {
         streamed = true;
         await this.anthropicStream(raw, req, res);
@@ -143,6 +162,7 @@ export class HttpProvider implements Provider {
       messages: [{ role: 'system', content: req.system }, ...openAIHistory(this.config.supportsTools === false ? textOnlyHistory(req.messages) : req.messages)],
       ...(req.tools.length ? { tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
     }, req.signal);
+    requestId = clientRequestId(raw);
     if (raw.headers.get('content-type')?.includes('text/event-stream')) {
       streamed = true; await this.openAIStream(raw, req, res);
     } else res = object(await raw.json(), 'response');
@@ -165,6 +185,7 @@ export class HttpProvider implements Provider {
     const mtr = metrics();
     return { message: { role: 'assistant', content }, inputTokens: mtr.usage.inputTokens ?? 0, outputTokens: mtr.usage.outputTokens ?? 0, stopReason: String(choice.finish_reason || ''), metrics: mtr };
     } catch (error) {
+      if (error instanceof HttpFailure) requestId = error.clientRequestId;
       throw new ProviderFailure((error as Error).message, metrics());
     }
   }

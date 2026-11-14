@@ -100,7 +100,7 @@ export class PuppyAgent {
       if (provider instanceof HttpProvider) provider.assertCompatible(request);
     }
     this.takeCall();
-    const id = store.startRequest(this.runId, session, purpose, providerConfig?.model === session.model ? providerConfig.pricing : undefined);
+    const id = store.startRequest(this.runId, session, purpose, routeProvider(providerConfig, session.model, session.effort).pricing);
     const started = performance.now();
     let completion: Completion;
     try { completion = await provider.complete(request); }
@@ -254,7 +254,7 @@ export class PuppyAgent {
       tools: [], maxTokens: cfg.maxOutputTokens, signal: this.controller.signal,
     }, 'compaction');
     const summary = textContent(result.message);
-    if (!summary.trim() || result.message.content.some(b => b.type !== 'text') || ['length', 'max_tokens'].includes(result.stopReason)) throw new Error('Context summary was empty or truncated. Original transcript is intact.');
+    if (!summary.trim() || result.message.content.some(b => !['text', 'thinking', 'redacted_thinking'].includes(b.type)) || ['length', 'max_tokens'].includes(result.stopReason)) throw new Error('Context summary was empty or truncated. Original transcript is intact.');
     const next = { ...session, summary };
     if (estimateTokens(await systemPrompt(cfg, next, store, tmpDir, scopedFiles), split.recent, toolDefinitions) > budget) throw new Error('Compacted context still exceeds the configured budget. Original transcript is intact.');
     const through = split.older.at(-1)!.id;

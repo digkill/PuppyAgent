@@ -1,6 +1,6 @@
 {
   "language": "en",
-  "provider": "kie",
+  "provider": "argolink",
   "providers": {
     "kie": {
       "protocol": "anthropic",
@@ -60,6 +60,18 @@
       "supportsEffort": false,
       "stream": true,
       "maxTokensParameter": "max_tokens"
+    },
+    "argolink": {
+      "protocol": "anthropic",
+      "baseUrl": "https://argolink.io/v1",
+      "modelsUrl": "https://argolink.io/v1/models",
+      "auth": "x-api-key",
+      "apiKeyEnv": "ARGO_LINK_API_KEY",
+      "model": "claude-opus-5-5",
+      "fallbackModel": "claude-sonnet-5-5",
+      "stream": true,
+      "promptCache": "5m",
+      "supportsTools": true
     }
   },
   "tmpDir": "/Volumes/Data/CodexTemp/puppy-agent",

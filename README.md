@@ -49,7 +49,7 @@ npm start -- config
 Open the printed config file. See [puppy.config.example.json](puppy.config.example.json) for provider examples. Configure your provider and model, then add its key to `.env` in the Puppy Agent root (see [.env.example](.env.example)):
 
 ```dotenv
-KIE_API_KEY=your-key
+ARGO_LINK_API_KEY=your-key
 PUPPY_TMP_DIR=/Volumes/Data/CodexTemp/puppy-agent
 PUPPY_MODEL=claude-opus-5-5
 PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
@@ -82,7 +82,7 @@ Switching a model within one provider preserves conversation history. Helpers in
 
 Levels: `auto`, `low`, `medium`, `high`, `xhigh`, `max`. `auto` omits the field; other levels send Anthropic `output_config.effort` or OpenAI Chat `reasoning_effort`. Supported levels depend on the model. These are requested settings, not measured reasoning capacity. Kie's published schema currently documents `thinkingFlag`, not granular effort, so its enforcement of the Anthropic effort field is **unverified**. Puppy does not silently map several levels to the same boolean or retry a paid request without the parameter. Use `auto` if your provider rejects effort. [Anthropic effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort).
 
-The default engine is **Claude Opus 5.5 via Kie**, model `claude-opus-5-5`, endpoint `https://api.kie.ai/claude/v1/messages`, with Bearer authentication and streaming. `modelsUrl` separately points to `https://api.kie.ai/anthropic/v1/models` for live model discovery. Actual access depends on your account. Live Kie requests have verified normalized Claude history and Gemini chat streaming. See [Kie's model documentation](https://docs.kie.ai/market/claude/claude-opus-5-5).
+The default engine is **Claude Opus 5.5 via ArgoLink**, model `claude-opus-5-5`, native endpoint `https://argolink.io/v1/messages`. Kie remains available as `/provider kie`. See [ArgoLink documentation](https://argolink.io/en/docs).
 
 ## English and Russian
 
@@ -246,10 +246,10 @@ Current boundaries: OpenAI Chat responses are buffered. GUI, MCP, browser tools,
 
 ### Models and runtime settings
 
-Claude Opus is the default coding engine; Kie's live model list also exposes `claude-fable-5`. Select it with `/model claude-fable-5`. Helper puppies inherit the parent's model, permissions and shared task budget. Spawn independent helpers before waiting to run them concurrently; `maxParallelChildren` defaults to 3.
+Claude Opus is the default coding engine; ArgoLink's live model list also exposes `claude-fable-5-2`. Select it with `/model claude-fable-5-2`. Helper puppies inherit the parent's model, permissions and shared task budget. Spawn independent helpers before waiting to run them concurrently; `maxParallelChildren` defaults to 3.
 
 ```dotenv
-PUPPY_PROVIDER=kie
+PUPPY_PROVIDER=argolink
 PUPPY_MODEL=claude-opus-5-5
 PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
 PUPPY_EFFORT=auto
@@ -266,3 +266,21 @@ Kie's `gemini-4-carbon-openai` has a separate OpenAI endpoint, selected automati
 For local Qwen/Llama, start Ollama or LM Studio with a tool-capable model, then set `PUPPY_PROVIDER=ollama` (or `lmstudio`), `PUPPY_MODEL=<installed model id>`, `PUPPY_EFFORT=auto`. `/provider ollama` creates a separate session and discovers installed models. Defaults are `http://127.0.0.1:11434/v1` and `http://127.0.0.1:1234/v1`; `PUPPY_BASE_URL` overrides the URL. Real local inference requires the local server to be running.
 
 The backup model is **Claude Sonnet 5.5**. `/fallback` verifies availability and switches the current session while preserving history, permissions and task budget. Configure `PUPPY_FALLBACK_MODEL` in `.env` or `fallbackModel` in the provider profile. Failed paid requests are not automatically replayed; unknown billing still blocks `/continue`.
+
+### ArgoLink
+
+Set these in Puppy's own `.env`:
+
+```dotenv
+ARGO_LINK_API_KEY=
+PUPPY_PROVIDER=argolink
+PUPPY_MODEL=claude-opus-5-5
+PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
+PUPPY_EFFORT=medium
+```
+
+The documented `ARGOLINK_API_KEY` name is also accepted; `ARGO_LINK_API_KEY` wins when both exist. Credentials stay out of config and SQL. Start `puppy chat --new` or use `/provider argolink`; old Kie sessions retain their saved provider. Select Fable 5.2 with `/model claude-fable-5-2`, or backup Sonnet with `/fallback`.
+
+Claude uses native Messages with a five-minute system-block cache, streaming and tools. Puppy's `baseUrl` is `https://argolink.io/v1` because it appends `/messages`; the Anthropic SDK examples use the origin because that SDK appends `/v1/messages`. Other models route to Chat Completions; keep effort `auto` unless the specific model's support is verified.
+
+ArgoLink bills USD, not Kie credits. `/usage` records separate token/cache usage and price estimates for Opus/Sonnet/Fable 5.2. Unknown fields remain unknown; estimates are not actual charges. The profile does not inherit `maxTaskCredits`. `maxPackCalls` bounds all helpers and compaction calls; set a monetary key quota in ArgoLink's console. Check actual charges in provider Usage. Account balance snapshot differences can include top-ups, holds and unrelated requests. Recognized `X-Client-Request-ID` values are preserved in request metrics for support.

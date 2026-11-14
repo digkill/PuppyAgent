@@ -49,7 +49,7 @@ npm start -- config
 Открой показанный `config.json`. Можно взять настройки из [puppy.config.example.json](puppy.config.example.json). Укажи `provider`, `providers.<name>.model` и добавь ключ в `.env` в корне Puppy Agent (образец — [.env.example](.env.example)). Конфигурация хранит **имя переменной**, а не API-ключ.
 
 ```dotenv
-KIE_API_KEY=your-key
+ARGO_LINK_API_KEY=your-key
 PUPPY_TMP_DIR=/Volumes/Data/CodexTemp/puppy-agent
 PUPPY_MODEL=claude-opus-5-5
 PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
@@ -96,7 +96,7 @@ Puppy сначала загружает `.env` своего исходного �
 
 Уровни: `auto`, `low`, `medium`, `high`, `xhigh`, `max`. `auto` не отправляет параметр; остальные передаются как Anthropic `output_config.effort` или OpenAI Chat `reasoning_effort`. Допустимые значения зависят от модели. Это запрошенная настройка, а не измеренная «мощность». Kie документирует `thinkingFlag`, но пока не точные уровни effort; применение Anthropic-поля его прокси **не подтверждено**. Puppy не подменяет несколько уровней одним булевым флагом и не повторяет платный запрос автоматически без параметра. Если провайдер отклоняет effort, выбери `auto`. [Документация Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort).
 
-Основной движок по умолчанию — **Claude Opus 5.5 через Kie**: модель `claude-opus-5-5`, endpoint `https://api.kie.ai/claude/v1/messages`, протокол `anthropic`, авторизация `bearer`, streaming. Для списка моделей отдельно задан `modelsUrl: https://api.kie.ai/anthropic/v1/models`. Доступ зависит от твоего аккаунта; живыми запросами проверены нормализация истории Claude и streaming чата Gemini. [Документация Kie](https://docs.kie.ai/market/claude/claude-opus-5-5).
+Основной движок по умолчанию — **Claude Opus 5.5 через ArgoLink**, модель `claude-opus-5-5`, native endpoint `https://argolink.io/v1/messages`. Kie остаётся доступен через `/provider kie`. [Документация ArgoLink](https://argolink.io/en/docs).
 
 Другого поставщика можно добавить с протоколом `anthropic` или `openai-chat`, своим `baseUrl`, `auth` (`bearer`, `x-api-key`, `none`) и переменной ключа. `baseUrl` должен включать версию API; Puppy добавляет `/messages`, `/models` или `/chat/completions`. Дополнительный `modelsUrl` должен иметь тот же origin. OpenAI-адаптер использует `max_completion_tokens`; поставщику нужна поддержка этого поля. Протокол Responses пока не реализован.
 
@@ -220,10 +220,10 @@ OpenAI Chat пока возвращает ответы целиком. GUI, MCP,
 
 ### Модели и настройки запуска
 
-Основной движок — Claude Opus. Kie также возвращает `claude-fable-5`: выбор через `/model claude-fable-5`. Щенки наследуют модель, права и общий бюджет родителя. Для одновременной работы сначала запускаются независимые щенки, затем вызывается ожидание; `maxParallelChildren` по умолчанию равен 3.
+Основной движок — Claude Opus. ArgoLink также возвращает `claude-fable-5-2`: выбор через `/model claude-fable-5-2`. Щенки наследуют модель, права и общий бюджет родителя. Для одновременной работы сначала запускаются независимые щенки, затем вызывается ожидание; `maxParallelChildren` по умолчанию равен 3.
 
 ```dotenv
-PUPPY_PROVIDER=kie
+PUPPY_PROVIDER=argolink
 PUPPY_MODEL=claude-opus-5-5
 PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
 PUPPY_EFFORT=auto
@@ -240,3 +240,21 @@ Memory управляет отправкой предыдущих задач: SQ
 Для локальных Qwen/Llama запусти Ollama или LM Studio с моделью, поддерживающей инструменты. Задай `PUPPY_PROVIDER=ollama` (или `lmstudio`), `PUPPY_MODEL=<id установленной модели>`, `PUPPY_EFFORT=auto`. `/provider ollama` создаёт отдельную сессию и запрашивает установленные модели. Адреса по умолчанию: `http://127.0.0.1:11434/v1` и `http://127.0.0.1:1234/v1`; замена через `PUPPY_BASE_URL`. Для реального локального запроса сервер должен быть запущен.
 
 Запасная модель — **Claude Sonnet 5.5**. `/fallback` проверяет её наличие у провайдера и переключает текущую сессию, сохраняя историю, права и бюджет. Настройка: `PUPPY_FALLBACK_MODEL` в `.env` или `fallbackModel` в профиле провайдера. Автоматического повтора платного запроса при ошибке нет; неизвестное списание продолжает блокировать `/continue`.
+
+### ArgoLink
+
+В `.env` самого Puppy:
+
+```dotenv
+ARGO_LINK_API_KEY=
+PUPPY_PROVIDER=argolink
+PUPPY_MODEL=claude-opus-5-5
+PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
+PUPPY_EFFORT=medium
+```
+
+Поддерживается также имя `ARGOLINK_API_KEY` из документации. При наличии обоих выбирается `ARGO_LINK_API_KEY`. Ключ не копируется в конфигурацию или SQL. После смены провайдера начинай `puppy chat --new`, либо используй `/provider argolink`. Старые Kie-сессии сохраняют свой провайдер. Fable 5.2: `/model claude-fable-5-2`; резервный Sonnet: `/fallback`.
+
+Claude использует native Messages API с кэшированием системного блока на 5 минут, streaming и инструментами. Puppy сам добавляет `/messages`, поэтому в его конфигурации `baseUrl=https://argolink.io/v1`; SDK Anthropic в документации добавляет `/v1/messages` целиком и использует адрес без `/v1`. Для других моделей профиля автоматически выбирается Chat Completions; effort там оставь `auto`, пока поддержка конкретной модели не проверена.
+
+ArgoLink списывает USD, а не Kie-кредиты. `/usage` хранит токены и кэш отдельно; оценка по тарифам Opus/Sonnet/Fable 5.2 остаётся оценкой, неизвестные поля не заменяются нулём. Поле `maxTaskCredits` в этот профиль не переносится. Общий лимит `maxPackCalls` действует на всю стаю и сжатие; денежную квоту ключа можно задать в кабинете ArgoLink. Фактическое списание проверяется в Usage провайдера. Разность снимков общего баланса может включать пополнения, резервы и другие запросы аккаунта. ID запроса провайдера сохраняется в метриках при наличии распознанного заголовка `X-Client-Request-ID`.

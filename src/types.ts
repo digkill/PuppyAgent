@@ -44,7 +44,7 @@ export type TokenUsage = {
 };
 export type RequestMetrics = {
   usage: TokenUsage; rawUsage: JsonObject; creditsConsumed: number | null;
-  responseId: string | null; model: string; latencyMs: number; streamed: boolean;
+  responseId: string | null; clientRequestId?: string | null; model: string; latencyMs: number; streamed: boolean;
 };
 export type RequestRecord = {
   requestedEffort: Effort;
