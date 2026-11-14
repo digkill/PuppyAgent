@@ -1,4 +1,4 @@
-import type { Block, Completion, CompletionRequest, JsonObject, Message, Provider, ProviderConfig, RequestMetrics } from './types.ts';
+import type { Block, Completion, CompletionRequest, JsonObject, Message, IncompleteToolCall, Provider, ProviderConfig, RequestMetrics } from './types.ts';
 import { count, metricsFromResponse } from './usage.ts';
 import { sse } from './sse.ts';
 import { checkEffort, isArgolink, isKie, KIE_GEMINI_MODELS, routeProvider } from './provider-routing.ts';
@@ -120,6 +120,7 @@ export class HttpProvider implements Provider {
   async complete(req: CompletionRequest): Promise<Completion> {
     const started = performance.now();
     let res: JsonObject = {};
+    const incompleteToolCalls: IncompleteToolCall[] = [];
     let streamed = false;
     let requestId: string | null = null;
     const metrics = () => ({ ...metricsFromResponse(res, this.config.protocol, this.config.model, Math.round(performance.now() - started), streamed), clientRequestId: requestId });
@@ -139,7 +140,7 @@ export class HttpProvider implements Provider {
       requestId = clientRequestId(raw);
       if (raw.headers.get('content-type')?.includes('text/event-stream')) {
         streamed = true;
-        await this.anthropicStream(raw, req, res);
+        await this.anthropicStream(raw, req, res, incompleteToolCalls);
       } else res = object(await raw.json(), 'response');
       checkApiCode(res);
       if (res.role !== 'assistant' || !Array.isArray(res.content)) throw new Error('Invalid Anthropic response.');
@@ -152,7 +153,7 @@ export class HttpProvider implements Provider {
         throw new Error(`Unsupported Anthropic block: ${String(b.type)}. This version supports text and client tool use.`);
       });
       const m = metrics();
-      return { message: { role: 'assistant', content }, inputTokens: m.usage.inputTokens ?? count(m.rawUsage.input_tokens) ?? 0, outputTokens: m.usage.outputTokens ?? 0, stopReason: String(res.stop_reason || ''), metrics: m };
+      return { ...(incompleteToolCalls.length ? { incompleteToolCalls } : {}), message: { role: 'assistant', content }, inputTokens: m.usage.inputTokens ?? count(m.rawUsage.input_tokens) ?? 0, outputTokens: m.usage.outputTokens ?? 0, stopReason: String(res.stop_reason || ''), metrics: m };
     }
     const raw = await this.http('chat/completions', {
       model: this.config.model, [this.config.maxTokensParameter || 'max_completion_tokens']: req.maxTokens,
@@ -179,11 +180,16 @@ export class HttpProvider implements Provider {
         const call = object(raw, 'tool call');
         const fn = object(call.function, 'function');
         if (typeof call.id !== 'string' || typeof fn.name !== 'string' || typeof fn.arguments !== 'string') throw new Error('Invalid tool call fields.');
-        content.push({ type: 'tool_use', id: call.id, name: fn.name, input: object(JSON.parse(fn.arguments), 'tool arguments') });
+        try { content.push({ type: 'tool_use', id: call.id, name: fn.name, input: object(JSON.parse(fn.arguments), 'tool arguments') }); }
+        catch (error) {
+          if (choice.finish_reason !== 'length') throw error;
+          incompleteToolCalls.push({ id: call.id, name: fn.name, partialJson: fn.arguments });
+          content.push({ type: 'text', text: `Incomplete tool request ${fn.name} was NOT executed: response token limit reached.` });
+        }
       }
     }
     const mtr = metrics();
-    return { message: { role: 'assistant', content }, inputTokens: mtr.usage.inputTokens ?? 0, outputTokens: mtr.usage.outputTokens ?? 0, stopReason: String(choice.finish_reason || ''), metrics: mtr };
+    return { ...(incompleteToolCalls.length ? { incompleteToolCalls } : {}), message: { role: 'assistant', content }, inputTokens: mtr.usage.inputTokens ?? 0, outputTokens: mtr.usage.outputTokens ?? 0, stopReason: String(choice.finish_reason || ''), metrics: mtr };
     } catch (error) {
       if (error instanceof HttpFailure) requestId = error.clientRequestId;
       throw new ProviderFailure((error as Error).message, metrics());
@@ -229,7 +235,7 @@ export class HttpProvider implements Provider {
     if (!done || !reason) throw new Error('Incomplete OpenAI stream. Partial tool calls were not executed.');
     result.choices = [{ finish_reason: reason, message: { role: 'assistant', content: text || null, ...(refusal ? { refusal } : {}), ...(calls.size ? { tool_calls: [...calls].sort(([a], [b]) => a - b).map(([, call]) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments || '{}' } })) } : {}) } }];
   }
-  async anthropicStream(raw: Response, req: CompletionRequest, result: JsonObject): Promise<void> {
+  async anthropicStream(raw: Response, req: CompletionRequest, result: JsonObject, incompleteToolCalls: IncompleteToolCall[] = []): Promise<void> {
     const blocks = new Map<number, { block: JsonObject; json: string; stopped: boolean }>();
     let started = false, stopped = false;
     for await (const record of sse(raw, req.signal)) {
@@ -270,7 +276,6 @@ export class HttpProvider implements Provider {
       } else if (type === 'content_block_stop') {
         const target = blocks.get(event.index as number);
         if (!target || target.stopped) throw new Error('SSE stop without an open block.');
-        if (target.block.type === 'tool_use' && target.json) target.block.input = object(JSON.parse(target.json), 'stream tool input');
         target.stopped = true;
       } else if (type === 'message_delta') {
         const delta = object(event.delta || {}, 'message delta');
@@ -283,6 +288,16 @@ export class HttpProvider implements Provider {
       } else if (type !== 'ping') throw new Error(`Unsupported SSE event: ${String(type)}`);
     }
     if (!stopped || !result.stop_reason) throw new Error('Incomplete provider stream. Partial output is not executable; inspect usage before retrying.');
-    result.content = [...blocks].sort(([a], [b]) => a - b).map(([, b]) => b.block);
+    result.content = [...blocks].sort(([a], [b]) => a - b).map(([, b]) => {
+      if (b.block.type === 'tool_use' && b.json) {
+        try { b.block.input = object(JSON.parse(b.json), 'stream tool input'); }
+        catch (error) {
+          if (result.stop_reason !== 'max_tokens') throw error;
+          incompleteToolCalls.push({ id: String(b.block.id || ''), name: String(b.block.name || ''), partialJson: b.json });
+          return { type: 'text', text: `Incomplete tool request ${String(b.block.name)} was NOT executed: response token limit reached.` };
+        }
+      }
+      return b.block;
+    });
   }
 }

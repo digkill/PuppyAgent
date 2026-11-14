@@ -25,7 +25,7 @@ function stream(events: unknown[], done = true): Response {
 }
 
 test('env controls provider, local endpoint, memory, function calling, output and streaming independently', () => {
-  const values = { PUPPY_PROVIDER: 'ollama', PUPPY_MODEL: 'qwen2.5-coder:7b', PUPPY_EFFORT: 'auto', PUPPY_FALLBACK_MODEL: 'llama3.1:8b', PUPPY_BASE_URL: 'http://127.0.0.1:8081/v1', PUPPY_MEMORY: 'false', PUPPY_FUNCTION_CALLING: 'false', PUPPY_MAX_TOKENS: '2048', PUPPY_STREAM: 'true' };
+  const values = { PUPPY_PROVIDER: 'ollama', PUPPY_MODEL: 'qwen2.5-coder:7b', PUPPY_EFFORT: 'auto', PUPPY_FALLBACK_MODEL: 'llama3.1:8b', PUPPY_BASE_URL: 'http://127.0.0.1:8081/v1', PUPPY_GOAL_CHECK: 'true', PUPPY_MAX_STEPS: '80', PUPPY_MAX_PACK_CALLS: '160', PUPPY_MEMORY: 'false', PUPPY_FUNCTION_CALLING: 'false', PUPPY_MAX_TOKENS: '2048', PUPPY_COMPACTION_MAX_TOKENS: '8192', PUPPY_MAX_CONTINUATIONS: '1', PUPPY_STREAM: 'true' };
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
   try {
     Object.assign(process.env, values);
@@ -34,7 +34,9 @@ test('env controls provider, local endpoint, memory, function calling, output an
     assert.equal(cfg.providers.ollama.baseUrl, values.PUPPY_BASE_URL);
     assert.equal(cfg.providers.ollama.fallbackModel, 'llama3.1:8b');
     assert.equal(cfg.providers.ollama.auth, 'none'); assert.equal(cfg.providers.ollama.maxTaskCredits, undefined);
+    assert.equal(cfg.goalCompletionCheck, true); assert.equal(cfg.maxSteps, 80); assert.equal(cfg.maxPackCalls, 160);
     assert.equal(cfg.conversationMemory, false); assert.equal(cfg.functionCalling, false); assert.equal(cfg.maxOutputTokens, 2048);
+    assert.equal(cfg.compactionMaxOutputTokens, 8192); assert.equal(cfg.maxResponseContinuations, 1);
     process.env.PUPPY_STREAM = 'sometimes';
     assert.throws(() => environmentDefaults(cfg), /PUPPY_STREAM/);
   } finally {
@@ -222,4 +224,18 @@ test('Argolink environment override discards another model tariff and supports t
     assert.equal(cfg.providers.argolink.pricing, undefined);
     assert.equal(routeProvider(cfg.providers.argolink).pricing?.inputUsdPerMTok, 0.7);
   } finally { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+});
+
+test('permission environment defaults accept every mode, reject invalid values and preserve the original config', () => {
+  const previous = process.env.PUPPY_PERMISSION_MODE;
+  try {
+    const original = validateConfig({ ...defaults, tmpDir: base });
+    for (const permission of ['read-only', 'ask', 'workspace-write', 'full-access']) {
+      process.env.PUPPY_PERMISSION_MODE = permission;
+      assert.equal(environmentDefaults(original).permissionMode, permission);
+      assert.equal(original.permissionMode, 'ask');
+    }
+    process.env.PUPPY_PERMISSION_MODE = 'yes-to-everything';
+    assert.throws(() => environmentDefaults(original), /PUPPY_PERMISSION_MODE must be one of/);
+  } finally { if (previous === undefined) delete process.env.PUPPY_PERMISSION_MODE; else process.env.PUPPY_PERMISSION_MODE = previous; }
 });

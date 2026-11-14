@@ -20,6 +20,7 @@ import type { Language, PermissionMode, Session, TokenUsage } from './types.ts';
 import type { PermissionRequest } from './permissions.ts';
 
 // Do not allow model/file output to inject terminal escape sequences or carriage returns.
+const VERSION: string = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 function printable(value: string): string { return sanitizeTerminal(value); }
 function print(text: string): void { stdout.write(printable(text) + '\n'); }
 function mode(value: string): PermissionMode {
@@ -46,7 +47,7 @@ async function main(): Promise<void> {
       new: { type: 'boolean' }, last: { type: 'boolean' }, here: { type: 'boolean' },
     },
   });
-  if (values.version) { print(JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version); return; }
+  if (values.version) { print(VERSION); return; }
   const requestedLanguage = values.language ? language(values.language) : undefined;
   if (values.help) { print(helpText(requestedLanguage || 'en')); return; }
   loadEnvironment();
@@ -106,6 +107,11 @@ async function main(): Promise<void> {
       print(values.json ? JSON.stringify({ sessionId: selected.id, latestTask: db.latestTask(selected.id), summary: summarizeUsage(records), requests: records }, null, 2) : usageText(records, cfg.language === 'ru'));
       return;
     }
+    const permissionOverride = values.permission !== undefined || process.env.PUPPY_PERMISSION_MODE !== undefined;
+    const restoreSession = (target: Session): Session => {
+      if (permissionOverride) db.update(target.id, { permissionMode: cfg.permissionMode });
+      return db.get(target.id);
+    };
     const createSession = (cwd: string): Session => db.create({ cwd, provider: cfg.provider, model: cfg.providers[cfg.provider].model, effort: cfg.providers[cfg.provider].effort || 'auto', permissionMode: cfg.permissionMode, language: cfg.language });
     let session: Session;
     if (command === 'resume') {
@@ -117,7 +123,7 @@ async function main(): Promise<void> {
       session = db.list(initialCwd).find(s => s.provider === cfg.provider) || createSession(initialCwd);
     } else session = createSession(initialCwd);
     await directory(session.cwd); // Fail clearly if the saved directory was removed or unmounted.
-    if (values.permission) db.update(session.id, { permissionMode: cfg.permissionMode });
+    session = restoreSession(session);
     if (values.model) db.update(session.id, { model: parseModel(values.model) });
     if (values.effort) db.update(session.id, { effort: parseEffort(values.effort) });
     if (requestedLanguage) db.update(session.id, { language: requestedLanguage });
@@ -164,12 +170,16 @@ async function main(): Promise<void> {
       }
       if (event.type === 'tool_start') output.notice(`${prefix} → ${detail.name}`);
       if (event.type === 'puppy_spawned') output.notice(`${prefix} ${t(session.language, 'helper')} ${detail.name}: ${detail.id}`);
+      if (event.type === 'continuation') output.notice(session.language === 'ru' ? `${prefix} Достигнут лимит ответа; продолжаю меньшими шагами (${detail.attempt}/${Number(detail.limit) < 0 ? 'бюджет задачи' : detail.limit}). Частичные инструменты не выполнялись.` : `${prefix} Response limit reached; continuing in smaller steps (${detail.attempt}/${Number(detail.limit) < 0 ? 'task budget' : detail.limit}). Partial tools were not executed.`);
+      if (event.type === 'goal_check_started') output.notice(session.language === 'ru' ? `${prefix} Проверяю выполнение исходной цели…` : `${prefix} Checking the original task goal…`);
+      if (event.type === 'goal_check') output.notice(`${prefix} ${detail.decision === 'complete' ? (session.language === 'ru' ? 'Цель проверена.' : 'Goal checked.') : detail.decision === 'blocked' ? (session.language === 'ru' ? 'Нужны входные данные или внешний доступ: ' : 'External input/access required: ') + String(detail.reason) : (session.language === 'ru' ? 'Цель ещё не достигнута, продолжаю: ' : 'Work remains; continuing: ') + String(detail.reason)}`);
+      if (event.type === 'compaction_retry') output.notice(session.language === 'ru' ? `${prefix} Сводка достигла лимита; запрашиваю более короткую в том же бюджете.` : `${prefix} Summary reached its output limit; requesting a shorter one within the same task budget.`);
       if (event.type === 'recovery') output.notice(`${prefix} ${t(session.language, 'recovered')}`);
       } });
     };
     const run = async (prompt?: string, resumeTask = false) => {
       active = makeAgent();
-      try { await active.run(session.id, prompt, resumeTask); }
+      try { await active.run(session.id, prompt, resumeTask); if (command === 'run' && db.latestTask(session.id)?.status === 'blocked') process.exitCode = 2; }
       catch (error) { presentation?.finish(true); print(`🐶 ${(error as Error).message}`); if (command === 'run') process.exitCode = 1; }
       finally { presentation?.finish(); presentation = undefined; active = undefined; session = db.get(session.id); }
     };
@@ -190,6 +200,7 @@ async function main(): Promise<void> {
       stdout.write(renderMascot({ language: session.language, columns: stdout.columns, color }));
     }
     showStatus(session, tmpDir);
+    print(`max output=${cfg.maxOutputTokens} · goal check=${cfg.goalCompletionCheck ? 'on' : 'off'} · continuation=${cfg.maxResponseContinuations < 0 ? 'task budget' : cfg.maxResponseContinuations} · pack calls=${cfg.maxPackCalls}`);
     routeNotice();
     if (command === 'run') {
       const task = positionals.slice(1).join(' ');
@@ -204,7 +215,11 @@ async function main(): Promise<void> {
       try { line = (await rl.question(`\n${t(session.language, 'you')} › `)).trim(); }
       catch { break; }
       if (!line) continue;
-      if (!line.startsWith('/')) { await run(line); continue; }
+      if (!line.startsWith('/')) {
+        const unfinished = db.latestTask(session.id);
+        await run(line, Boolean(unfinished && unfinished.status !== 'completed'));
+        continue;
+      }
       const space = line.indexOf(' ');
       const name = space === -1 ? line : line.slice(0, space);
       const argument = space === -1 ? '' : line.slice(space + 1).trim();
@@ -261,7 +276,7 @@ async function main(): Promise<void> {
             if (!argument) throw new Error('Usage: /resume SESSION_ID');
             const target = db.get(argument);
             await directory(target.cwd);
-            session = target;
+            session = restoreSession(target);
             showStatus(session, tmpDir); break;
           }
           case '/new': session = createSession(session.cwd); showStatus(session, tmpDir); break;
@@ -269,7 +284,7 @@ async function main(): Promise<void> {
             if (!argument) throw new Error('Usage: /cd PATH');
             const cwd = await directory(resolve(session.cwd, argument));
             // A user-selected directory starts a new workspace session. An agent's change_directory keeps its original boundary.
-            session = db.list(cwd)[0] || createSession(cwd);
+            session = restoreSession(db.list(cwd)[0] || createSession(cwd));
             showStatus(session, tmpDir); break;
           }
           case '/permissions':
@@ -281,7 +296,7 @@ async function main(): Promise<void> {
             session = db.get(session.id);
             cfg.language = session.language;
             print(t(session.language, 'languageSet')); break;
-          case '/continue': await run('Continue the current task. Inspect uncertain outcomes before repeating interrupted actions.', true); break;
+          case '/continue': await run(argument || 'Continue the current task. Inspect uncertain outcomes before repeating interrupted actions.', true); break;
           case '/usage': {
             const records = db.requests(session.id);
             print(argument === 'json' ? JSON.stringify({ sessionId: session.id, latestTask: db.latestTask(session.id), summary: summarizeUsage(records), requests: records }, null, 2) : usageText(records, session.language === 'ru'));
@@ -324,7 +339,7 @@ function listSessions(store: Store, lang: Language, cwd?: string): void {
   print(sessions.map(s => `${s.id}  ${s.status.padEnd(11)}  ${s.title}\n  ${s.cwd}`).join('\n') || t(lang, 'noSessions'));
 }
 function showStatus(session: Session, tmpDir: string): void {
-  print(`🐶 Puppy Agent · ${session.id}\n${session.cwd}\n${session.provider} / ${session.model || t(session.language, 'modelMissing')} · effort=${session.effort} · ${session.permissionMode}\n${t(session.language, 'tokens')}: ${session.inputTokens} in / ${session.outputTokens} out · tmp: ${tmpDir}`);
+  print(`🐶 Puppy Agent ${VERSION} · ${session.id}\n${session.cwd}\n${session.provider} / ${session.model || t(session.language, 'modelMissing')} · effort=${session.effort} · ${session.permissionMode}\n${t(session.language, 'tokens')}: ${session.inputTokens} in / ${session.outputTokens} out · tmp: ${tmpDir}`);
   if (session.permissionMode === 'full-access') print(t(session.language, 'fullAccess'));
 }
 

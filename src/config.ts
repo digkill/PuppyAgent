@@ -7,7 +7,7 @@ import { parseEffort, parseModel } from './model-settings.ts';
 
 export const MODES: PermissionMode[] = ['read-only', 'ask', 'workspace-write', 'full-access'];
 export const defaults: Config = {
-  conversationMemory: true, functionCalling: true,
+  goalCompletionCheck: false, conversationMemory: true, functionCalling: true,
   language: 'en',
   provider: 'argolink',
   providers: {
@@ -18,7 +18,7 @@ export const defaults: Config = {
   },
   tmpDir: '', dataDir: '~/.local/share/puppy-agent', permissionMode: 'ask',
   maxSteps: 40, maxPackCalls: 80, maxChildren: 6, maxParallelChildren: 3, maxDepth: 2,
-  maxOutputTokens: 4096, contextBudgetTokens: 48000, requestTimeoutMs: 120000,
+  maxOutputTokens: 16384, compactionMaxOutputTokens: 16384, maxResponseContinuations: 2, contextBudgetTokens: 128000, requestTimeoutMs: 120000,
   commandTimeoutMs: 60000, maxToolOutputChars: 24000,
   instructions: '', instructionFiles: [],
 };
@@ -32,6 +32,7 @@ export function validateConfig(raw: unknown): Config {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Config must be a JSON object.');
   const cfg = { ...defaults, ...raw } as Config;
   if (!['en', 'ru'].includes(cfg.language)) throw new Error('config.language must be en or ru.');
+  if (typeof cfg.goalCompletionCheck !== 'boolean') throw new Error('goalCompletionCheck must be boolean.');
   if (typeof cfg.conversationMemory !== 'boolean' || typeof cfg.functionCalling !== 'boolean') throw new Error('conversationMemory and functionCalling must be booleans.');
   for (const key of ['provider', 'tmpDir', 'dataDir', 'instructions'] as const) {
     if (typeof cfg[key] !== 'string') throw new Error(`Invalid config.${key}`);
@@ -42,9 +43,10 @@ export function validateConfig(raw: unknown): Config {
   cfg.dataDir = expandPath(cfg.dataDir);
   if (!MODES.includes(cfg.permissionMode)) throw new Error('Invalid permissionMode.');
   if (!Array.isArray(cfg.instructionFiles) || cfg.instructionFiles.some(p => typeof p !== 'string')) throw new Error('Invalid instructionFiles.');
-  for (const key of ['maxSteps', 'maxPackCalls', 'maxChildren', 'maxParallelChildren', 'maxDepth', 'maxOutputTokens', 'contextBudgetTokens', 'requestTimeoutMs', 'commandTimeoutMs', 'maxToolOutputChars'] as const) {
+  for (const key of ['maxSteps', 'maxPackCalls', 'maxChildren', 'maxParallelChildren', 'maxDepth', 'maxOutputTokens', 'compactionMaxOutputTokens', 'contextBudgetTokens', 'requestTimeoutMs', 'commandTimeoutMs', 'maxToolOutputChars'] as const) {
     if (!Number.isSafeInteger(cfg[key]) || cfg[key] < 1) throw new Error(`config.${key} must be a positive integer.`);
   }
+  if (!Number.isSafeInteger(cfg.maxResponseContinuations) || cfg.maxResponseContinuations < -1 || cfg.maxResponseContinuations > 8) throw new Error('maxResponseContinuations must be an integer from -1 to 8 (-1 follows the task budget).');
   if (cfg.contextBudgetTokens < cfg.maxOutputTokens * 2) throw new Error('contextBudgetTokens must be at least twice maxOutputTokens.');
   if (!cfg.providers || typeof cfg.providers !== 'object' || Array.isArray(cfg.providers) || !cfg.providers[cfg.provider]) throw new Error('Selected provider is missing.');
   for (const [name, p] of Object.entries(cfg.providers)) validateProvider(name, p);
@@ -108,6 +110,11 @@ export async function initConfig(tmpDir = process.env.PUPPY_TMP_DIR || '', langu
 export function environmentDefaults(config: Config): Config {
   const cfg = structuredClone(config);
   cfg.providers = { ...structuredClone(defaults.providers), ...cfg.providers };
+  if (process.env.PUPPY_PERMISSION_MODE !== undefined) {
+    const permission = process.env.PUPPY_PERMISSION_MODE as PermissionMode;
+    if (!MODES.includes(permission)) throw new Error(`PUPPY_PERMISSION_MODE must be one of: ${MODES.join(', ')}.`);
+    cfg.permissionMode = permission;
+  }
   if (process.env.PUPPY_PROVIDER !== undefined) cfg.provider = process.env.PUPPY_PROVIDER;
   if (!cfg.providers[cfg.provider]) throw new Error(`Unknown PUPPY_PROVIDER: ${cfg.provider}`);
   const selected = cfg.providers[cfg.provider];
@@ -122,9 +129,14 @@ export function environmentDefaults(config: Config): Config {
   if (process.env.PUPPY_EFFORT !== undefined) selected.effort = parseEffort(process.env.PUPPY_EFFORT);
   if (process.env.PUPPY_BASE_URL !== undefined) { selected.baseUrl = process.env.PUPPY_BASE_URL; delete selected.modelsUrl; }
   if (process.env.PUPPY_STREAM !== undefined) selected.stream = envBoolean('PUPPY_STREAM');
+  if (process.env.PUPPY_GOAL_CHECK !== undefined) cfg.goalCompletionCheck = envBoolean('PUPPY_GOAL_CHECK');
+  if (process.env.PUPPY_MAX_PACK_CALLS !== undefined) cfg.maxPackCalls = Number(process.env.PUPPY_MAX_PACK_CALLS);
+  if (process.env.PUPPY_MAX_STEPS !== undefined) cfg.maxSteps = Number(process.env.PUPPY_MAX_STEPS);
   if (process.env.PUPPY_MEMORY !== undefined) cfg.conversationMemory = envBoolean('PUPPY_MEMORY');
   if (process.env.PUPPY_FUNCTION_CALLING !== undefined) cfg.functionCalling = envBoolean('PUPPY_FUNCTION_CALLING');
   if (process.env.PUPPY_MAX_TOKENS !== undefined) cfg.maxOutputTokens = Number(process.env.PUPPY_MAX_TOKENS);
+  if (process.env.PUPPY_COMPACTION_MAX_TOKENS !== undefined) cfg.compactionMaxOutputTokens = Number(process.env.PUPPY_COMPACTION_MAX_TOKENS);
+  if (process.env.PUPPY_MAX_CONTINUATIONS !== undefined) cfg.maxResponseContinuations = Number(process.env.PUPPY_MAX_CONTINUATIONS);
   if (process.env.PUPPY_CONTEXT_TOKENS !== undefined) cfg.contextBudgetTokens = Number(process.env.PUPPY_CONTEXT_TOKENS);
   return validateConfig(cfg);
 }

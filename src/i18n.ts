@@ -50,7 +50,7 @@ export function helpText(lang: Language): string {
 
   /help /sessions /resume ID /new /cd PATH /status /permissions MODE
   /provider [NAME] /model [MODEL_ID] /fallback /effort [auto|low|medium|high|xhigh|max]
-  /language en|ru /usage [json] /memory /remember KEY VALUE /forget KEY /compact /continue /exit
+  /language en|ru /usage [json] /memory /remember KEY VALUE /forget KEY /compact /continue [INSTRUCTION] /exit
   From source checkout: npm start -- <command>
 `;
   return lang === 'ru'

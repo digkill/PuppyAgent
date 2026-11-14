@@ -533,7 +533,7 @@ test('CLI runs with a mocked API transport, persists sessions and removes runtim
     `);
     const path = join(f.root, 'config.json');
     await writeFile(path, JSON.stringify({ ...f.config, language: 'ru', permissionMode: 'workspace-write', providers: { test: { ...providerCfg, stream: true, maxTaskCredits: 10 } } }));
-    const env = { PUPPY_ENV_FILE: join(f.root, 'no-provider.env'), PUPPY_CONFIG: path, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
+    const env = { PUPPY_ENV_FILE: join(f.root, 'no-provider.env'), PUPPY_PROVIDER: 'test', PUPPY_CONFIG: path, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
     const result = await cli(['run', 'write a greeting'], env, f.workspace);
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /Готово/);
@@ -577,4 +577,23 @@ test('runtime cleanup removes read-only module caches without following director
     assert.equal(await readFile(join(outside, 'preserve.txt'), 'utf8'), 'preserve');
     assert.equal((await stat(outside)).mode, outsideMode);
   } finally { await cleanupRuntime(runtime); await f.cleanup(); }
+});
+
+
+test('CLI restore applies explicit permission environment, honors the flag and otherwise keeps saved permissions', async () => {
+  const f = await fixture();
+  try {
+    const config = join(f.root, 'permissions-config.json');
+    await writeFile(config, JSON.stringify({ ...f.config, dataDir: f.root, permissionMode: 'workspace-write' }));
+    const env = { PUPPY_ENV_FILE: join(f.root, 'absent.env'), PUPPY_CONFIG: config, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, PUPPY_PERMISSION_MODE: 'full-access' };
+    const explicit = await cli(['resume', f.session.id, '--no-banner'], env, f.workspace);
+    assert.match(explicit.output, /full-access/);
+    assert.equal(f.store.get(f.session.id).permissionMode, 'full-access');
+    const flag = await cli(['resume', f.session.id, '--permission', 'read-only', '--no-banner'], env, f.workspace);
+    assert.match(flag.output, /read-only/);
+    assert.equal(f.store.get(f.session.id).permissionMode, 'read-only');
+    f.store.update(f.session.id, { permissionMode: 'ask' });
+    await cli(['resume', f.session.id, '--no-banner'], { ...env, PUPPY_PERMISSION_MODE: undefined }, f.workspace);
+    assert.equal(f.store.get(f.session.id).permissionMode, 'ask');
+  } finally { await f.cleanup(); }
 });

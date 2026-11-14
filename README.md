@@ -255,7 +255,7 @@ PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
 PUPPY_EFFORT=auto
 PUPPY_MEMORY=true
 PUPPY_FUNCTION_CALLING=true
-PUPPY_MAX_TOKENS=4096
+PUPPY_MAX_TOKENS=16384
 PUPPY_STREAM=true
 ```
 
@@ -284,3 +284,25 @@ The documented `ARGOLINK_API_KEY` name is also accepted; `ARGO_LINK_API_KEY` win
 Claude uses native Messages with a five-minute system-block cache, streaming and tools. Puppy's `baseUrl` is `https://argolink.io/v1` because it appends `/messages`; the Anthropic SDK examples use the origin because that SDK appends `/v1/messages`. Other models route to Chat Completions; keep effort `auto` unless the specific model's support is verified.
 
 ArgoLink bills USD, not Kie credits. `/usage` records separate token/cache usage and price estimates for Opus/Sonnet/Fable 5.2. Unknown fields remain unknown; estimates are not actual charges. The profile does not inherit `maxTaskCredits`. `maxPackCalls` bounds all helpers and compaction calls; set a monetary key quota in ArgoLink's console. Check actual charges in provider Usage. Account balance snapshot differences can include top-ups, holds and unrelated requests. Recognized `X-Client-Request-ID` values are preserved in request metrics for support.
+
+### Response limits and continuation
+
+`PUPPY_MAX_TOKENS=16384` caps each response, including Claude thinking. Summaries have an independent `PUPPY_COMPACTION_MAX_TOKENS=16384` ceiling and use low effort on verified routes. A summary that reaches its output limit gets one shorter regeneration; the original SQL transcript is retained. `PUPPY_CONTEXT_TOKENS=128000` is a conservative compaction threshold, not a promise of every model's context capacity.
+
+After a complete API response ending in `max_tokens`/`length`, Puppy can continue up to `PUPPY_MAX_CONTINUATIONS=2` consecutive times. Partial tools are never executed; incomplete JSON is retained as separate diagnostic evidence. Failed connections, incomplete streams, content filtering and unknown billing under a monetary limit are not automatically replayed. Every attempt uses the same shared task budget. Set `0` to disable automatic continuation.
+
+An ordinary message after an unfinished task retains that task's allowance. `/continue [instruction]` does so explicitly. Use `/new` for a separate new task/session. Restart the CLI after changing `.env` or updating; `puppy resume --last` restores the saved session and working directory.
+
+### Permissions from .env
+
+Set `PUPPY_PERMISSION_MODE=full-access` to run files, commands and memory operations without approval prompts. [.env.example](.env.example) lists all modes: `read-only`, `ask`, `workspace-write`, `full-access`. Precedence: `--permission` → environment/dotenv → saved session → config. An explicit environment setting also applies when restoring or switching sessions; otherwise saved permissions remain intact. Helpers inherit their parent's permissions. Restart after editing `.env`, or use `/permissions full-access` in the current process.
+
+### Completing the whole goal
+
+`PUPPY_GOAL_CHECK=true` enables a separate review of the original goal, current checkpoint and recorded tool results before completion. Remaining feasible work resumes the same task; an intermediate file list is insufficient. Genuinely missing input or external access pauses the task instead of marking it complete (batch exit code 2). The reviewer executes no tools. Review calls are paid and count toward the shared `maxPackCalls` budget.
+
+`PUPPY_MAX_CONTINUATIONS=-1` follows the shared task budget without a separate token-limit interruption count. `0` disables it; `1`–`8` bound consecutive continuations. The full-task environment example sets `PUPPY_MAX_STEPS=80`. Spending/request limits are retained. Network failures and incomplete streams are not automatically replayed.
+
+The CLI header now shows its loaded version and prints effective limits and goal-check state at launch. A running Node process retains old code after an update: exit with `/exit`, run `puppy resume --last`, then enter `/continue`.
+
+`PUPPY_MAX_PACK_CALLS=160` in `.env` sets the task's shared API-call ceiling, including helpers, compaction and completion checks. Use a positive integer. Resuming subtracts prior attempts: 80 used with a ceiling of 160 leaves 80; spending is retained. Restart, restore the session and use `/continue` after changing it. `PUPPY_MAX_STEPS` independently bounds one agent's steps per run.

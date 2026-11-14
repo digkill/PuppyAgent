@@ -160,7 +160,7 @@ test('CLI renders streamed Markdown once, honors raw/pipe modes, and explicitly 
     `);
     const cli = async (flags: string[]) => new Promise<string>((resolveResult, reject) => {
       const child = spawn(process.execPath, ['--experimental-strip-types', resolve('src/cli.ts'), 'run', 'demo', ...flags], {
-        cwd: root, env: { ...process.env, NO_COLOR: '1', PUPPY_ENV_FILE: envFile, PUPPY_CONFIG: config, PUPPY_TMP_DIR: join(root, 'tmp'), NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` }, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: root, env: { ...process.env, NO_COLOR: '1', PUPPY_ENV_FILE: envFile, PUPPY_PROVIDER: 'test', PUPPY_CONFIG: config, PUPPY_TMP_DIR: join(root, 'tmp'), NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` }, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let output = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { output += b; });
       child.on('error', reject); child.on('close', code => code === 0 ? resolveResult(output) : reject(new Error(output)));

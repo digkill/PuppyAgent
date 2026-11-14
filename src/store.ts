@@ -133,6 +133,9 @@ export class Store {
   latestTask(sessionId: string, unfinished = false): TaskRun | undefined {
     return this.db.prepare(`SELECT * FROM task_runs WHERE sessionId=? ${unfinished ? "AND status!='completed'" : ''} ORDER BY rowid DESC LIMIT 1`).get(sessionId) as TaskRun | undefined;
   }
+  reopenTask(id: string): void {
+    this.db.prepare("UPDATE task_runs SET status='running',finishedAt=NULL WHERE id=?").run(id);
+  }
   finishTask(id: string, status: string): void {
     this.db.prepare('UPDATE task_runs SET status=?,finishedAt=? WHERE id=?').run(status, new Date().toISOString(), id);
   }

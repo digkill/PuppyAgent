@@ -44,6 +44,7 @@ export type TokenUsage = {
 };
 export type RequestMetrics = {
   usage: TokenUsage; rawUsage: JsonObject; creditsConsumed: number | null;
+  stopReason?: string | null; requestedMaxOutputTokens?: number;
   responseId: string | null; clientRequestId?: string | null; model: string; latencyMs: number; streamed: boolean;
 };
 export type RequestRecord = {
@@ -54,6 +55,7 @@ export type RequestRecord = {
 };
 export type TaskRun = { id: string; sessionId: string; status: string; creditLimit: number | null; createdAt: string; finishedAt: string | null; startMessageId: number };
 export type Config = {
+  goalCompletionCheck: boolean;
   conversationMemory: boolean;
   functionCalling: boolean;
   language: Language;
@@ -68,6 +70,8 @@ export type Config = {
   maxParallelChildren: number;
   maxDepth: number;
   maxOutputTokens: number;
+  compactionMaxOutputTokens: number;
+  maxResponseContinuations: number;
   contextBudgetTokens: number;
   requestTimeoutMs: number;
   commandTimeoutMs: number;
@@ -102,7 +106,8 @@ export type CompletionRequest = {
   signal?: AbortSignal;
   onTextDelta?: (text: string) => void;
 };
-export type Completion = { message: Message; inputTokens: number; outputTokens: number; stopReason: string; metrics?: RequestMetrics };
+export type IncompleteToolCall = { id: string; name: string; partialJson: string };
+export type Completion = { incompleteToolCalls?: IncompleteToolCall[]; message: Message; inputTokens: number; outputTokens: number; stopReason: string; metrics?: RequestMetrics };
 export interface Provider {
   complete(request: CompletionRequest): Promise<Completion>;
   models(signal?: AbortSignal): Promise<string[]>;
