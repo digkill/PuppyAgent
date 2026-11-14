@@ -1,14 +1,20 @@
 {
   "name": "puppy-agent",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "A friendly, persistent coding agent with a pack of helper puppies.",
+  "bin": { "puppy": "bin/puppy.mjs", "puppy-agent": "bin/puppy.mjs" },
+  "files": ["bin/", "dist/", "src/", "README.md", "README.ru.md", "puppy.config.example.json", ".env.example", "assets/", "puppy_agent.py"],
+  "repository": { "type": "git", "url": "https://github.com/digkill/PuppyAgent.git" },
+  "author": { "name": "MediaRise", "url": "https://MediaRise.org" },
+  "homepage": "https://MediaRise.org",
   "engines": { "node": ">=22.15.0" },
   "scripts": {
     "start": "node --experimental-strip-types src/cli.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "install:global": "node --experimental-strip-types src/cli.ts install"
   },
   "devDependencies": { "@types/node": "^22.15.0", "typescript": "~5.8.3" }
 }

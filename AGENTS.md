@@ -15,6 +15,6 @@ Puppy Agent is a TypeScript / Node.js terminal agent. Keep the runtime free of t
 - Permission checks must resolve symlinks. Shell execution is not a filesystem sandbox; require approval outside full-access mode.
 - Tests must use `PUPPY_TEST_TMP` for disk artifacts; no implicit system-temp fallback.
 
-## Temporary files for this bootstrap task
+## Temporary files
 
-The user explicitly allowed `/private/tmp` for this task after the external Data volume was blocked by the session sandbox. Use `/private/tmp/puppy-agent-bootstrap` for temporary dependencies and verification artifacts. This exception does not change Puppy Agent's configurable runtime temp-directory behavior.
+Keep agent diagnostics, tests, archives, dependency caches, and build staging in a task directory under the mounted `/Volumes/Data/CodexTemp`. Set `TMPDIR`, `TMP`, and `TEMP` there. Do not fall back to an internal disk. Installation/update staging can be directed with `PUPPY_INSTALL_TMP_DIR`; the installed application's configured `PUPPY_TMP_DIR` remains separate. Remove unneeded task artifacts when finished.

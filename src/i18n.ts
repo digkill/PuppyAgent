@@ -10,7 +10,7 @@ const en = {
   noCompaction: 'No compaction needed.', memorySaved: 'Project memory saved.', memoryRemoved: 'Project memory removed.',
   tokens: 'Tokens (reported subtotal)', modelMissing: '(model not configured)',
   fullAccess: 'Full access: tools and shell commands run without confirmation under your OS account.',
-  terminalRequired: 'Interactive chat needs a terminal. Use: npm start -- run "task"',
+  terminalRequired: 'Interactive chat needs a terminal. Use: puppy run "task"',
   languageSet: 'Language: English',
 };
 type Key = keyof typeof en;
@@ -24,7 +24,7 @@ const ru: Record<Key, string> = {
   noCompaction: 'Сжатие не требуется.', memorySaved: 'Память проекта сохранена.', memoryRemoved: 'Запись памяти проекта удалена.',
   tokens: 'Токены (известная сумма)', modelMissing: '(модель не настроена)',
   fullAccess: 'Полный доступ: инструменты и shell выполняются без подтверждений с правами твоего пользователя ОС.',
-  terminalRequired: 'Для чата нужен терминал. Используй: npm start -- run "задача"',
+  terminalRequired: 'Для чата нужен терминал. Используй: puppy run "задача"',
   languageSet: 'Язык: русский',
 };
 export function t(language: Language, key: Key): string { return (language === 'ru' ? ru : en)[key]; }
@@ -34,17 +34,24 @@ export function language(value: string): Language {
 }
 export function helpText(lang: Language): string {
   const commands = `
-  npm start -- init [--tmp /absolute/temp/path] [--language en|ru]
-  npm start -- models [--provider name]
-  npm start -- chat [--new] [--cwd path] [--provider name] [--permission mode] [--language en|ru]
-  npm start -- run "task" [--cwd path] [--permission mode] [--language en|ru]
-  npm start -- resume [session-id | --last | --here]
-  npm start -- sessions [--here]
-  npm start -- usage [session-id] [--run-id TASK_ID] [--json]
-  npm start -- config
+  puppy init [--tmp /absolute/temp/path] [--language en|ru]
+  puppy models [--provider name]
+  puppy [chat] [--new] [--cwd path] [--provider name] [--permission mode] [--language en|ru]
+               [--model MODEL_ID] [--effort LEVEL]
+  puppy run "task" [--cwd path] [--permission mode] [--language en|ru]
+  puppy resume [session-id | --last | --here]
+  puppy sessions [--here]
+  puppy usage [session-id] [--run-id TASK_ID] [--json]
+  puppy config
+  puppy install [--prefix PATH]
+  puppy update [--check | --local] [--source PATH]
+  puppy --version
+  Output: --color / --no-color / --no-markdown
 
   /help /sessions /resume ID /new /cd PATH /status /permissions MODE
+  /provider [NAME] /model [MODEL_ID] /fallback /effort [auto|low|medium|high|xhigh|max]
   /language en|ru /usage [json] /memory /remember KEY VALUE /forget KEY /compact /continue /exit
+  From source checkout: npm start -- <command>
 `;
   return lang === 'ru'
     ? `🐶 Puppy Agent\n${commands}\nРежимы: read-only, ask, workspace-write, full-access\nchat восстанавливает последнюю сессию директории; --new создаёт новую.\nresume --last восстанавливает последнюю сессию и её рабочую директорию.\nrun отклоняет действия, требующие подтверждения. Полный доступ выбирается явно.`

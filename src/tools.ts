@@ -171,7 +171,7 @@ export class Tools {
 
 export async function runCommand(command: string, cwd: string, tmpDir: string, timeout: number, limit: number, signal: AbortSignal, secretEnvNames: string[] = []): Promise<string> {
   signal.throwIfAborted();
-  const env = { ...process.env, TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir, npm_config_cache: join(tmpDir, 'npm-cache'), XDG_CACHE_HOME: join(tmpDir, 'cache'), PYTHONPYCACHEPREFIX: join(tmpDir, 'pycache') };
+  const env = { ...process.env, TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir, npm_config_cache: join(tmpDir, 'npm-cache'), XDG_CACHE_HOME: join(tmpDir, 'cache'), PYTHONPYCACHEPREFIX: join(tmpDir, 'pycache'), GOCACHE: join(tmpDir, 'go-build'), GOMODCACHE: join(tmpDir, 'go-mod'), GOPATH: join(tmpDir, 'go') };
   for (const name of secretEnvNames) delete (env as NodeJS.ProcessEnv)[name];
   return new Promise((resolveResult, reject) => {
     const child = spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command], {

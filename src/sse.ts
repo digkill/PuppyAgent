@@ -8,9 +8,11 @@ export async function* sse(response: Response, signal?: AbortSignal): AsyncGener
   function line(value: string): { event: string; data: JsonObject } | null {
     if (value === '') {
       if (!data.length) { event = ''; return null; }
-      const raw: unknown = JSON.parse(data.join('\n'));
+      const payload = data.join('\n');
       const current = event;
       event = ''; data = [];
+      if (payload.trim() === '[DONE]') return { event: 'done', data: {} };
+      const raw: unknown = JSON.parse(payload);
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid SSE data object.');
       return { event: current, data: raw as JsonObject };
     }

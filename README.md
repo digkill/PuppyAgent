@@ -8,6 +8,32 @@
 
 Your loyal AI coding companion. A TypeScript / Node.js terminal agent that uses API models, works with files and commands, remembers sessions, and delegates tasks to helper puppies.
 
+Created by [MediaRise](https://MediaRise.org).
+
+## Global installation and updates
+
+From this checkout, with your `.env` configured:
+
+```bash
+npm run install:global
+# Or choose a user-owned npm prefix:
+npm run install:global -- --prefix "$HOME/.local"
+```
+
+If npm's default command directory is not writable, the installer automatically uses `~/.local`. Ensure the printed command directory is in `PATH`. Then use the agent from any directory:
+
+```bash
+cd /path/to/any/project
+puppy
+puppy --version
+puppy update --check
+puppy update
+```
+
+`puppy-agent` is an alias for `puppy`. The installer builds plain JavaScript with Node's built-in TypeScript stripper, packs a local archive, and installs it globally without runtime dependencies or lifecycle scripts. Private `.env` files are excluded from the archive. Your source `.env` is copied to `~/.config/puppy-agent/.env` only when that file does not exist; config, keys and SQLite sessions stay outside the package and survive updates. An existing config is preserved; a missing config is initialized.
+
+`puppy update` checks the default branch of this project's recorded HTTPS Git repository and installs a higher package version. It never substitutes an unrelated package from the public npm registry or downgrades the installed version. Source changes must be pushed with a higher `package.json` version before remote updates can find them. `puppy update --local` reinstalls the recorded local checkout, including unpublished changes at the same version. `--source /path/to/checkout` chooses another local source explicitly. Git and npm are needed for installation/updates; Node.js 22.15+ runs the installed CLI. Update checks happen only when requested.
+
 This is the first working CLI core. It has **no runtime package dependencies**: native `fetch`, `node:sqlite`, and Node's TypeScript support. Requires **Node.js 22.15+**. On Node 22, SQLite and TypeScript support may print experimental warnings.
 
 ## Quick start
@@ -25,6 +51,9 @@ Open the printed config file. See [puppy.config.example.json](puppy.config.examp
 ```dotenv
 KIE_API_KEY=your-key
 PUPPY_TMP_DIR=/Volumes/Data/CodexTemp/puppy-agent
+PUPPY_MODEL=claude-opus-5-5
+PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
+PUPPY_EFFORT=medium
 ```
 
 Then launch:
@@ -35,9 +64,25 @@ npm start -- models
 npm start -- chat
 ```
 
-The config stores the **environment-variable name**, not your key. Puppy automatically loads its own root `.env` before reading config or connecting to providers. Existing shell environment values take priority, so `export KIE_API_KEY=...` still works. The working repository's `.env` is not loaded when using `--cwd` or restoring a session. `.env` is excluded from version control. Set `PUPPY_CONFIG=/absolute/path/config.json` in the environment or Puppy's `.env` to use a different config location.
+The config stores the **environment-variable name**, not your key. Puppy loads its own checkout `.env` and then the user-level `~/.config/puppy-agent/.env` before reading config. Existing environment values win; the checkout's entries take priority over user-level fallback entries. Global installs also load the original checkout `.env` recorded by the installer while that checkout exists; the user-level file remains a fallback. Set `PUPPY_ENV_FILE=/absolute/path/.env` to load only that file. The working repository's `.env` is never automatically loaded. Set `PUPPY_CONFIG=/absolute/path/config.json` to select a different config file.
 
-The default engine is **Claude Opus 5.5 via Kie**, model `claude-opus-5-5`, endpoint `https://api.kie.ai/claude/v1/messages`, with Bearer authentication and streaming. `modelsUrl` separately points to `https://api.kie.ai/anthropic/v1/models` for live model discovery. Actual access depends on your account. No live paid-provider request has been verified as part of this bootstrap. See [Kie's model documentation](https://docs.kie.ai/market/claude/claude-opus-5-5).
+## Model and effort
+
+`PUPPY_MODEL` and `PUPPY_EFFORT` select defaults for new sessions. Saved sessions restore their own choices. Explicit launch flags `--model MODEL_ID --effort high` override a restored session. The current selections appear in `/status` and are recorded with requests for cost comparisons.
+
+```text
+/model                  # Fetch live models and choose a number
+/model claude-opus-5-5   # Select a model from that provider's live list
+/effort                 # Choose an effort level interactively
+/effort high
+/effort auto
+```
+
+Switching a model within one provider preserves conversation history. Helpers inherit both model and effort. Token price estimates configured for another model are not reused after switching.
+
+Levels: `auto`, `low`, `medium`, `high`, `xhigh`, `max`. `auto` omits the field; other levels send Anthropic `output_config.effort` or OpenAI Chat `reasoning_effort`. Supported levels depend on the model. These are requested settings, not measured reasoning capacity. Kie's published schema currently documents `thinkingFlag`, not granular effort, so its enforcement of the Anthropic effort field is **unverified**. Puppy does not silently map several levels to the same boolean or retry a paid request without the parameter. Use `auto` if your provider rejects effort. [Anthropic effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort).
+
+The default engine is **Claude Opus 5.5 via Kie**, model `claude-opus-5-5`, endpoint `https://api.kie.ai/claude/v1/messages`, with Bearer authentication and streaming. `modelsUrl` separately points to `https://api.kie.ai/anthropic/v1/models` for live model discovery. Actual access depends on your account. Live Kie requests have verified normalized Claude history and Gemini chat streaming. See [Kie's model documentation](https://docs.kie.ai/market/claude/claude-opus-5-5).
 
 ## English and Russian
 
@@ -59,6 +104,18 @@ The interactive greeting uses the user's terminal mascot from [puppy_agent.py](p
 
 ## Sessions and commands
 
+Responses in a terminal render Markdown: headings, emphasis, inline code, lists and checkboxes, quotes, visible links, rules, and tables. Language-tagged fenced code blocks get built-in lexical syntax colors for JavaScript/TypeScript, Python, Go, JSON/JSONC, Bash, SQL, YAML, PHP, HTML/XML, CSS, diff, C/C++, Rust, Java and C#. Unknown languages remain readable plain code. Source code characters and indentation are preserved; HTML is shown as text rather than executed.
+
+Streaming formatting waits for complete lines and complete table rows/blocks. Helper replies and billing notices are kept out of an active response's code blocks. The SQLite transcript retains the original model text; formatting changes only its display.
+
+```bash
+puppy --no-color        # Plain formatting, no ANSI colors (also respects NO_COLOR)
+puppy --no-markdown     # Show original Markdown markup
+puppy run 'task' --color # Force rich output, including when redirected
+```
+
+When stdout is redirected, responses keep raw Markdown without ANSI by default. Explicit `--color` overrides `NO_COLOR`; `--no-color` wins if both flags are set. Terminal escape sequences supplied by the model are removed; styling comes only from the renderer. This is a practical Markdown subset, not a browser or a complete CommonMark implementation.
+
 ```bash
 npm start -- chat --new --cwd /path/to/project --permission workspace-write
 npm start -- run 'Inspect this project and explain its architecture' --permission read-only
@@ -78,6 +135,7 @@ npm start -- sessions
 | `/status` | Show session, directory, provider, mode, usage, and temp path |
 | `/permissions MODE` | Change this session's permission mode |
 | `/language en`, `/language ru` | Select interface and response language |
+| `/model [MODEL_ID]`, `/effort [LEVEL]` | Choose model or requested effort, retaining context |
 | `/memory` | Show global, project, and session memory |
 | `/remember KEY VALUE` | Save a project fact |
 | `/forget KEY` | Remove a project fact |
@@ -97,7 +155,7 @@ Add named providers in `providers` and select one using `provider` or `--provide
 
 `baseUrl` includes the API version; Puppy appends `/messages`, `/models`, or `/chat/completions`. Optional `modelsUrl` selects a separate discovery URL on the same origin. Authentication can be `bearer`, `x-api-key`, or `none`. HTTPS is required except for localhost. Redirects are refused to prevent forwarding credentials. The OpenAI adapter uses `max_completion_tokens`; the selected service must support that field. Responses API is not implemented.
 
-`stream: true` enables Anthropic SSE, including fragmented `tool_use` JSON. Tools execute only after a complete `message_stop`; a truncated/error stream saves available usage evidence and never executes partial tools. Set `stream: false` for a buffered response. OpenAI Chat responses are currently buffered.
+`stream: true` enables Anthropic SSE, including fragmented `tool_use` JSON. Tools execute only after a complete `message_stop`; a truncated/error stream saves available usage evidence and never executes partial tools. Set `stream: false` for a buffered response. OpenAI Chat also supports streaming; tool calls execute only after a complete response.
 
 ## Usage, cache and spending limits
 
@@ -184,3 +242,27 @@ PUPPY_TEST_TMP=/absolute/test/temp npm test
 Only static checks need TypeScript and `@types/node`. Tests use `node:test`, explicit temporary locations, and mocked provider transport. No API credentials or paid calls are needed. Fixtures clean up their own folders.
 
 Current boundaries: OpenAI Chat responses are buffered. GUI, MCP, browser tools, automatic process recovery after app exit, isolated helper worktrees, and provider-enforced hard monetary ceilings are not implemented. This is a functioning foundation to extend, rather than a feature-complete replacement for a mature coding-agent product.
+
+
+### Models and runtime settings
+
+Claude Opus is the default coding engine; Kie's live model list also exposes `claude-fable-5`. Select it with `/model claude-fable-5`. Helper puppies inherit the parent's model, permissions and shared task budget. Spawn independent helpers before waiting to run them concurrently; `maxParallelChildren` defaults to 3.
+
+```dotenv
+PUPPY_PROVIDER=kie
+PUPPY_MODEL=claude-opus-5-5
+PUPPY_FALLBACK_MODEL=claude-sonnet-5-5
+PUPPY_EFFORT=auto
+PUPPY_MEMORY=true
+PUPPY_FUNCTION_CALLING=true
+PUPPY_MAX_TOKENS=4096
+PUPPY_STREAM=true
+```
+
+Memory controls whether earlier tasks enter the next request; SQL transcripts remain intact and current tool rounds are always retained. Function calling enables tools and helper puppies. Max tokens limits each model response. Use `puppy chat --new` after changing model defaults, or `/model` in a restored session: saved sessions retain their model.
+
+Kie's `gemini-4-carbon-openai` has a separate OpenAI endpoint, selected automatically. Its documented route is chat-only, so Puppy disables tools/helpers for it. Claude uses the native Messages API, with adjacent user/tool-result messages merged for gateway compatibility.
+
+For local Qwen/Llama, start Ollama or LM Studio with a tool-capable model, then set `PUPPY_PROVIDER=ollama` (or `lmstudio`), `PUPPY_MODEL=<installed model id>`, `PUPPY_EFFORT=auto`. `/provider ollama` creates a separate session and discovers installed models. Defaults are `http://127.0.0.1:11434/v1` and `http://127.0.0.1:1234/v1`; `PUPPY_BASE_URL` overrides the URL. Real local inference requires the local server to be running.
+
+The backup model is **Claude Sonnet 5.5**. `/fallback` verifies availability and switches the current session while preserving history, permissions and task budget. Configure `PUPPY_FALLBACK_MODEL` in `.env` or `fallbackModel` in the provider profile. Failed paid requests are not automatically replayed; unknown billing still blocks `/continue`.

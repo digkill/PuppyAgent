@@ -14,11 +14,13 @@ const width = 68, height = 50;
 const reset = '\x1b[0m';
 const fg = (rgb: RGB) => `\x1b[38;2;${rgb.join(';')}m`;
 const bg = (rgb: RGB) => `\x1b[48;2;${rgb.join(';')}m`;
+const brandText = (lang: Language) => `${lang === 'ru' ? 'Создано' : 'Created by'} MediaRise · MediaRise.org`;
+const brand = (lang: Language, color: boolean) => `${lang === 'ru' ? 'Создано' : 'Created by'} MediaRise · ${color ? fg([239, 68, 68]) : ''}MediaRise.org${color ? reset : ''}`;
 
 export function renderMascot(options: { language: Language; columns?: number; color?: boolean }): string {
   if (options.color === false || (options.columns ?? 80) < width) {
     const subtitle = options.language === 'ru' ? 'твой верный ИИ-помощник' : 'your loyal AI coding companion';
-    return String.raw` / \__` + `\n( oᴥo )  Puppy Agent\n /   \\   ${subtitle}\n`;
+    return String.raw` / \__` + `\n( oᴥo )  Puppy Agent\n /   \\   ${subtitle}\n${brand(options.language, options.color !== false)}\n`;
   }
   const pixels: (Color | null)[][] = Array.from({ length: height }, () => Array<Color | null>(width).fill(null));
   const ellipse = (cx: number, cy: number, rx: number, ry: number, color: Color) => {
@@ -75,5 +77,6 @@ export function renderMascot(options: { language: Language; columns?: number; co
   lines.push(centered('P U P P Y   A G E N T', [35, 195, 241], true));
   lines.push(centered(options.language === 'ru' ? 'твой верный ИИ-помощник в коде' : 'your loyal AI coding companion', [153, 163, 181]));
   lines.push(centered(options.language === 'ru' ? '● готов к работе  ·  гав!' : '● ready to code  ·  woof!', [81, 208, 163]));
+  lines.push(' '.repeat(Math.max(0, Math.floor((width - brandText(options.language).length) / 2))) + fg([153, 163, 181]) + brand(options.language, true));
   return lines.join('\n') + '\n';
 }

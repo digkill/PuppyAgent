@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { Store } from '../src/store.ts';
 import { canonicalPath, Permissions } from '../src/permissions.ts';
 import { defaults, prepareRuntime, validateConfig } from '../src/config.ts';
-import { HttpProvider, openAIHistory } from '../src/provider.ts';
+import { anthropicHistory, HttpProvider, openAIHistory } from '../src/provider.ts';
 import { PuppyAgent } from '../src/agent.ts';
 import { Tools, runCommand } from '../src/tools.ts';
 import { activeHistory, compactionSplit } from '../src/context.ts';
@@ -191,6 +191,24 @@ test('Anthropic adapter sends exact protocol, tools and authorization', async ()
     assert.equal(res.inputTokens, 3);
     assert.equal(res.message.content[0].type, 'tool_use');
   } finally { delete process.env.PUPPY_PROVIDER_TEST_KEY; }
+});
+
+test('Anthropic gateway history merges adjacent turns and tool results without changing SQL content', () => {
+  const history: CompletionRequest['messages'] = [
+    { role: 'user', content: [{ type: 'text', text: 'First requirement.' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Second requirement.' }] },
+    { role: 'assistant', content: [call('a', 'read_file', { path: 'one' }), call('b', 'read_file', { path: 'two' })] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'one result' }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b', content: 'two result' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Continue carefully.' }] },
+  ];
+  const original = JSON.stringify(history);
+  const wire = anthropicHistory(history);
+  assert.deepEqual(wire.map(m => m.role), ['user', 'assistant', 'user']);
+  assert.equal(wire[0].content, 'First requirement.\n\nSecond requirement.');
+  assert.ok(Array.isArray(wire[2].content));
+  assert.deepEqual(wire[2].content.map(b => b.type), ['tool_result', 'tool_result', 'text']);
+  assert.equal(JSON.stringify(history), original);
 });
 
 test('OpenAI adapter round-trips multiple tool calls and results', async () => {
@@ -462,7 +480,8 @@ test('instructions, memory, language and workspace are included in context', asy
 
 test('mascot has TrueColor, compact and Russian variants without a Python dependency', () => {
   const color = renderMascot({ language: 'en', columns: 80, color: true });
-  assert.equal(color.trimEnd().split('\n').length, 28);
+  assert.equal(color.trimEnd().split('\n').length, 29);
+  assert.match(color, /Created by MediaRise · \x1b\[38;2;239;68;68mMediaRise\.org\x1b\[0m/);
   assert.match(color, /\x1b\[38;2;/);
   assert.match(color, /your loyal AI coding companion/);
   assert.match(renderMascot({ language: 'ru', color: true }), /готов к работе/);
@@ -513,7 +532,7 @@ test('CLI runs with a mocked API transport, persists sessions and removes runtim
     `);
     const path = join(f.root, 'config.json');
     await writeFile(path, JSON.stringify({ ...f.config, language: 'ru', permissionMode: 'workspace-write', providers: { test: { ...providerCfg, stream: true, maxTaskCredits: 10 } } }));
-    const env = { PUPPY_CONFIG: path, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
+    const env = { PUPPY_ENV_FILE: join(f.root, 'no-provider.env'), PUPPY_CONFIG: path, PUPPY_TMP_DIR: f.tmpDir, TMPDIR: f.tmpDir, TMP: f.tmpDir, TEMP: f.tmpDir, NODE_OPTIONS: `--import=${pathToFileURL(transport).href}` };
     const result = await cli(['run', 'write a greeting'], env, f.workspace);
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /Готово/);

@@ -99,6 +99,25 @@ test('models use the separately configured discovery endpoint', async () => {
   assert.deepEqual(await provider.models(), ['claude-opus-5-5']);
 });
 
+test('multiple streamed text blocks preserve initial text and paragraph separators for terminal rendering', async () => {
+  let streamed = '';
+  const events = [
+    event('message_start', { message: { role: 'assistant', content: [], usage: rawUsage } }),
+    event('content_block_start', { index: 0, content_block: { type: 'text', text: '# Hello' } }),
+    event('content_block_stop', { index: 0 }),
+    event('content_block_start', { index: 1, content_block: { type: 'text', text: '' } }),
+    event('content_block_delta', { index: 1, delta: { type: 'text_delta', text: '**World**' } }),
+    event('content_block_stop', { index: 1 }),
+    event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } }),
+    event('message_stop'),
+  ];
+  const provider = new HttpProvider(providerConfig, 1000, async () => stream(events));
+  const response = await provider.complete({ system: 's', messages: [], tools: [], maxTokens: 100, onTextDelta: text => { streamed += text; } });
+  const finalText = response.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  assert.equal(streamed, '# Hello\n**World**');
+  assert.equal(streamed, finalText);
+});
+
 test('a truncated stream rejects partial tools and retains observed usage and billing', async () => {
   const provider = new HttpProvider(providerConfig, 3000, async () => stream(frames().slice(0, -1)));
   await assert.rejects(provider.complete({ system: 's', messages: [], tools: [], maxTokens: 10 }), error => {

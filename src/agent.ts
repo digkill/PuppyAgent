@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, Completion, CompletionRequest, Config, Message, Provider, RequestMetrics, Session, ToolCall } from './types.ts';
-import { HttpProvider, ProviderFailure } from './provider.ts';
+import { HttpProvider, ProviderFailure, textOnlyHistory } from './provider.ts';
 import { metricsFromResponse } from './usage.ts';
 import { Store } from './store.ts';
 import { Permissions } from './permissions.ts';
@@ -8,6 +8,7 @@ import type { Approver } from './permissions.ts';
 import { Tools, toolDefinitions, bounded } from './tools.ts';
 import { systemPrompt } from './instructions.ts';
 import { activeHistory, compactionSplit, estimateTokens, textContent } from './context.ts';
+import { routeProvider } from './provider-routing.ts';
 
 type Job = { id: string; parentId: string; name: string; status: 'running' | 'completed' | 'failed'; reported: boolean; result?: string; promise: Promise<string> };
 export type AgentOptions = {
@@ -24,6 +25,7 @@ export class PuppyAgent {
   creditLimit: number | null = null;
   creditsConsumed = 0;
   billingUnknown = false;
+  taskStartMessageId = 0;
   constructor(options: AgentOptions) {
     this.options = options; this.callsRemaining = options.config.maxPackCalls;
   }
@@ -36,7 +38,7 @@ export class PuppyAgent {
     if (this.options.providerFactory) return this.options.providerFactory(session);
     const cfg = this.options.config.providers[session.provider];
     if (!cfg) throw new Error(`Provider ${session.provider} no longer exists in config.`);
-    return new HttpProvider({ ...cfg, model: session.model }, this.options.config.requestTimeoutMs);
+    return new HttpProvider({ ...cfg, model: session.model, effort: session.effort }, this.options.config.requestTimeoutMs);
   }
   async run(sessionId: string, prompt?: string, resumeTask = false): Promise<string> {
     let result: string;
@@ -80,6 +82,7 @@ export class PuppyAgent {
     const task = previous || store.startTask(sessionId, config.providers[session.provider]?.maxTaskCredits);
     this.runId = task.id;
     this.creditLimit = task.creditLimit;
+    this.taskStartMessageId = task.startMessageId;
     const requests = store.requests(sessionId, task.id);
     this.creditsConsumed = requests.reduce((sum, r) => sum + (r.metrics?.creditsConsumed ?? 0), 0);
     this.billingUnknown = requests.some(r => r.metrics?.creditsConsumed == null);
@@ -94,9 +97,10 @@ export class PuppyAgent {
     if (!this.options.providerFactory) {
       if (providerConfig.auth !== 'none' && !process.env[providerConfig.apiKeyEnv]) throw new Error(`Set environment variable ${providerConfig.apiKeyEnv}. No API request was sent.`);
       if (!session.model || session.model.startsWith('REPLACE_')) throw new Error('Configure an actual model ID. No API request was sent.');
+      if (provider instanceof HttpProvider) provider.assertCompatible(request);
     }
     this.takeCall();
-    const id = store.startRequest(this.runId, session, purpose, config.providers[session.provider]?.pricing);
+    const id = store.startRequest(this.runId, session, purpose, providerConfig?.model === session.model ? providerConfig.pricing : undefined);
     const started = performance.now();
     let completion: Completion;
     try { completion = await provider.complete(request); }
@@ -172,12 +176,13 @@ export class PuppyAgent {
         const session = store.get(sessionId);
         const provider = this.provider(session);
         await this.compact(session, provider, false, tools.seenInstructions);
-        const current = store.get(sessionId);
+        const current = this.contextSession(store.get(sessionId));
         const system = await systemPrompt(cfg, current, store, tmpDir, tools.seenInstructions);
         const messages = activeHistory(store.messages(sessionId), current.summaryThrough);
+        const toolsAvailable = cfg.functionCalling && routeProvider(cfg.providers[current.provider], current.model, current.effort).supportsTools !== false;
         // Snapshots make instruction/config changes visible without losing historical evidence.
         this.event(sessionId, 'request', { step, provider: current.provider, model: current.model, system, messageIds: messages.map(m => m.id) });
-        const response = await this.invoke(current, provider, { system, messages, tools: toolDefinitions, maxTokens: cfg.maxOutputTokens, signal: this.controller.signal,
+        const response = await this.invoke(current, provider, { system, messages: toolsAvailable ? messages : textOnlyHistory(messages), tools: toolsAvailable ? toolDefinitions : [], maxTokens: cfg.maxOutputTokens, signal: this.controller.signal,
           onTextDelta: delta => this.options.emit?.({ sessionId, type: 'text_delta', detail: { text: delta } }),
         }, 'agent');
         this.controller.signal.throwIfAborted();
@@ -185,6 +190,10 @@ export class PuppyAgent {
         if (!response.message.content.length) throw new Error('Provider returned an empty response.');
         if (calls.length > 16 || new Set(calls.map(c => c.id)).size !== calls.length || calls.some(c => !c.id || !c.name)) throw new Error('Invalid or excessive tool calls from provider.');
         store.append(sessionId, response.message);
+        if (calls.length && !toolsAvailable) {
+          store.append(sessionId, { role: 'user', content: calls.map(c => ({ type: 'tool_result', tool_use_id: c.id, is_error: true, content: 'Not executed: function calling is disabled for this session or route.' })) });
+          throw new Error('Provider returned tools while function calling is disabled. No tool was executed.');
+        }
         const text = textContent(response.message);
         if (text) this.event(sessionId, 'assistant', { text, final: !calls.length });
         if (['max_tokens', 'length', 'content_filter'].includes(response.stopReason)) throw new Error(`Provider stopped with ${response.stopReason}; partial response saved. Use /continue to continue.`);
@@ -230,6 +239,8 @@ export class PuppyAgent {
   }
   async compact(session: Session, provider: Provider, force = false, scopedFiles: Map<string, string> = new Map()): Promise<boolean> {
     const { config: cfg, store, tmpDir } = this.options;
+    if (!cfg.conversationMemory && !this.runId) return false;
+    session = this.contextSession(session);
     const system = await systemPrompt(cfg, session, store, tmpDir, scopedFiles);
     const messages = activeHistory(store.messages(session.id), session.summaryThrough);
     const estimated = estimateTokens(system, messages, toolDefinitions);
@@ -248,8 +259,14 @@ export class PuppyAgent {
     if (estimateTokens(await systemPrompt(cfg, next, store, tmpDir, scopedFiles), split.recent, toolDefinitions) > budget) throw new Error('Compacted context still exceeds the configured budget. Original transcript is intact.');
     const through = split.older.at(-1)!.id;
     store.event(session.id, 'compaction', { summary, through, previousThrough: session.summaryThrough });
-    store.update(session.id, { summary, summaryThrough: through });
+    if (cfg.conversationMemory) store.update(session.id, { summary, summaryThrough: through });
+    else store.saveTaskContext(this.runId, session.id, summary, through);
     return true;
+  }
+  contextSession(session: Session): Session {
+    if (this.options.config.conversationMemory) return session;
+    const context = this.options.store.taskContext(this.runId, session.id);
+    return { ...session, summary: context?.summary || '', summaryThrough: context?.throughId ?? this.taskStartMessageId };
   }
   spawn(parentId: string, task: string, name: string, depth: number): string {
     const { store, config: cfg } = this.options;
@@ -259,7 +276,7 @@ export class PuppyAgent {
     if (this.jobs.size >= cfg.maxChildren) throw new Error('Pack helper limit reached.');
     if ([...this.jobs.values()].filter(j => j.status === 'running').length >= cfg.maxParallelChildren) throw new Error('Parallel helper limit reached. Wait for existing puppies before spawning another.');
     const parent = store.get(parentId);
-    const child = store.create({ cwd: parent.cwd, workspace: parent.workspace, provider: parent.provider, model: parent.model, permissionMode: parent.permissionMode, language: parent.language, parentId, title: name });
+    const child = store.create({ cwd: parent.cwd, workspace: parent.workspace, provider: parent.provider, model: parent.model, effort: parent.effort, permissionMode: parent.permissionMode, language: parent.language, parentId, title: name });
     // A bounded, complete-message snapshot, with explicit notice when older history is omitted.
     const history = store.messages(parentId, parent.summaryThrough);
     let snapshot = '';

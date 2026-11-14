@@ -1,12 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { Language, Message, PermissionMode, Pricing, RequestMetrics, RequestRecord, Session, StoredMessage, TaskRun } from './types.ts';
+import type { Effort, Language, Message, PermissionMode, Pricing, RequestMetrics, RequestRecord, Session, StoredMessage, TaskRun } from './types.ts';
 
 export class Store {
   db: DatabaseSync;
   constructor(path: string) {
     this.db = new DatabaseSync(path);
-    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) > 3) {
+    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) > 5) {
       this.db.close();
       throw new Error('Database schema is newer than this version of Puppy Agent.');
     }
@@ -50,15 +50,29 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS requests_session ON requests(sessionId,startedAt);
       CREATE INDEX IF NOT EXISTS requests_run ON requests(runId);
+      CREATE TABLE IF NOT EXISTS task_context (
+        runId TEXT NOT NULL REFERENCES task_runs(id), sessionId TEXT NOT NULL REFERENCES sessions(id),
+        summary TEXT NOT NULL, throughId INTEGER NOT NULL, PRIMARY KEY(runId,sessionId)
+      );
     `);
     if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'language')) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN language TEXT NOT NULL DEFAULT 'en'");
     }
-    this.db.exec('PRAGMA user_version=3');
+    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'effort')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT 'auto'");
+    }
+    if (!this.db.prepare('PRAGMA table_info(requests)').all().some(column => column.name === 'requestedEffort')) {
+      this.db.exec("ALTER TABLE requests ADD COLUMN requestedEffort TEXT NOT NULL DEFAULT 'auto'");
+    }
+    if (!this.db.prepare('PRAGMA table_info(task_runs)').all().some(column => column.name === 'startMessageId')) {
+      this.db.exec('ALTER TABLE task_runs ADD COLUMN startMessageId INTEGER NOT NULL DEFAULT 0');
+    }
+    this.db.exec('PRAGMA user_version=5');
   }
-  create(input: { cwd: string; workspace?: string; provider: string; model: string; permissionMode: PermissionMode; language?: Language; parentId?: string; title?: string }): Session {
+  create(input: { cwd: string; workspace?: string; provider: string; model: string; effort?: Effort; permissionMode: PermissionMode; language?: Language; parentId?: string; title?: string }): Session {
     const now = new Date().toISOString();
     const session: Session = {
+      effort: input.effort || 'auto',
       language: input.language || 'en',
       id: randomUUID(), parentId: input.parentId || null, title: input.title || 'New puppy adventure',
       cwd: input.cwd, workspace: input.workspace || input.cwd, provider: input.provider,
@@ -85,8 +99,8 @@ export class Store {
   isLeased(sessionId: string): boolean {
     return Boolean(this.db.prepare('SELECT 1 FROM leases WHERE sessionId=? AND expires>?').get(sessionId, Date.now()));
   }
-  update(id: string, patch: Partial<Pick<Session, 'cwd' | 'permissionMode' | 'status' | 'title' | 'summary' | 'summaryThrough' | 'language'>>): void {
-    const allowed = ['cwd', 'permissionMode', 'status', 'title', 'summary', 'summaryThrough', 'language'];
+  update(id: string, patch: Partial<Pick<Session, 'cwd' | 'permissionMode' | 'status' | 'title' | 'summary' | 'summaryThrough' | 'language' | 'model' | 'effort'>>): void {
+    const allowed = ['cwd', 'permissionMode', 'status', 'title', 'summary', 'summaryThrough', 'language', 'model', 'effort'];
     const entries = Object.entries(patch);
     if (entries.some(([key]) => !allowed.includes(key))) throw new Error('Unsupported session field.');
     if (!entries.length) return;
@@ -111,8 +125,9 @@ export class Store {
     this.db.prepare('UPDATE sessions SET inputTokens=inputTokens+?,outputTokens=outputTokens+? WHERE id=?').run(input, output, id);
   }
   startTask(sessionId: string, creditLimit?: number): TaskRun {
-    const task: TaskRun = { id: randomUUID(), sessionId, status: 'running', creditLimit: creditLimit ?? null, createdAt: new Date().toISOString(), finishedAt: null };
-    this.db.prepare('INSERT INTO task_runs VALUES (?,?,?,?,?,?)').run(task.id, sessionId, task.status, task.creditLimit, task.createdAt, null);
+    const startMessageId = Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM messages WHERE sessionId=?').get(sessionId)!.id);
+    const task: TaskRun = { id: randomUUID(), sessionId, status: 'running', creditLimit: creditLimit ?? null, createdAt: new Date().toISOString(), finishedAt: null, startMessageId };
+    this.db.prepare('INSERT INTO task_runs (id,sessionId,status,creditLimit,createdAt,finishedAt,startMessageId) VALUES (?,?,?,?,?,?,?)').run(task.id, sessionId, task.status, task.creditLimit, task.createdAt, null, startMessageId);
     return task;
   }
   latestTask(sessionId: string, unfinished = false): TaskRun | undefined {
@@ -121,9 +136,15 @@ export class Store {
   finishTask(id: string, status: string): void {
     this.db.prepare('UPDATE task_runs SET status=?,finishedAt=? WHERE id=?').run(status, new Date().toISOString(), id);
   }
+  taskContext(runId: string, sessionId: string): { summary: string; throughId: number } | undefined {
+    return this.db.prepare('SELECT summary,throughId FROM task_context WHERE runId=? AND sessionId=?').get(runId, sessionId) as { summary: string; throughId: number } | undefined;
+  }
+  saveTaskContext(runId: string, sessionId: string, summary: string, through: number): void {
+    this.db.prepare('INSERT INTO task_context VALUES (?,?,?,?) ON CONFLICT(runId,sessionId) DO UPDATE SET summary=excluded.summary,throughId=excluded.throughId').run(runId, sessionId, summary, through);
+  }
   startRequest(runId: string, session: Session, purpose: string, pricing?: Pricing): string {
     const id = randomUUID();
-    this.db.prepare('INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, runId, session.id, purpose, session.provider, session.model, 'pending', null, pricing ? JSON.stringify(pricing) : null, new Date().toISOString(), null);
+    this.db.prepare('INSERT INTO requests (id,runId,sessionId,purpose,provider,requestedModel,status,metrics,pricing,startedAt,finishedAt,requestedEffort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id, runId, session.id, purpose, session.provider, session.model, 'pending', null, pricing ? JSON.stringify(pricing) : null, new Date().toISOString(), null, session.effort);
     return id;
   }
   finishRequest(id: string, metrics: RequestMetrics, status: 'completed' | 'failed'): void {
