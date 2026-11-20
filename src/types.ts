@@ -44,6 +44,7 @@ export type TokenUsage = {
 };
 export type RequestMetrics = {
   usage: TokenUsage; rawUsage: JsonObject; creditsConsumed: number | null;
+  failureKind?: 'request-timeout' | 'stream-idle-timeout' | 'cancelled';
   stopReason?: string | null; requestedMaxOutputTokens?: number;
   responseId: string | null; clientRequestId?: string | null; model: string; latencyMs: number; streamed: boolean;
 };
@@ -74,6 +75,7 @@ export type Config = {
   maxResponseContinuations: number;
   contextBudgetTokens: number;
   requestTimeoutMs: number;
+  streamIdleTimeoutMs: number;
   commandTimeoutMs: number;
   maxToolOutputChars: number;
   instructions: string;

@@ -306,3 +306,15 @@ Set `PUPPY_PERMISSION_MODE=full-access` to run files, commands and memory operat
 The CLI header now shows its loaded version and prints effective limits and goal-check state at launch. A running Node process retains old code after an update: exit with `/exit`, run `puppy resume --last`, then enter `/continue`.
 
 `PUPPY_MAX_PACK_CALLS=160` in `.env` sets the task's shared API-call ceiling, including helpers, compaction and completion checks. Use a positive integer. Resuming subtracts prior attempts: 80 used with a ceiling of 160 leaves 80; spending is retained. Restart, restore the session and use `/continue` after changing it. `PUPPY_MAX_STEPS` independently bounds one agent's steps per run.
+
+### API and stream timeouts
+
+```dotenv
+PUPPY_REQUEST_TIMEOUT_MS=900000
+PUPPY_STREAM_IDLE_TIMEOUT_MS=180000
+# Optional shell-command limit: PUPPY_COMMAND_TIMEOUT_MS=240000
+```
+
+The total request deadline is 15 minutes instead of 2. The separate stream idle limit is 3 minutes without incoming data; every chunk, including heartbeats, thinking and tool JSON, restarts that wait. Active generation past two minutes is allowed, while the total deadline still applies. Increase `PUPPY_REQUEST_TIMEOUT_MS` for longer generations. Values must be positive integer milliseconds, at most 2147483647; zero does not disable protection.
+
+Ctrl+C interrupts a pending read immediately. `/usage json` distinguishes total-request and stream-idle timeouts through `metrics.failureKind`. Partial tools never execute; attempts and observed usage remain in SQL. Failed paid requests are not automatically replayed. `/continue` retains the task's spending. Restart after changing `.env` or updating.

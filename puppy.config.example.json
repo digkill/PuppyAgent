@@ -84,7 +84,7 @@
   "maxDepth": 2,
   "maxOutputTokens": 16384,
   "contextBudgetTokens": 128000,
-  "requestTimeoutMs": 120000,
+  "requestTimeoutMs": 900000,
   "commandTimeoutMs": 60000,
   "maxToolOutputChars": 24000,
   "instructions": "Be friendly, precise, and finish the user's task. Verify changes before reporting success.",
@@ -93,5 +93,6 @@
   "functionCalling": true,
   "compactionMaxOutputTokens": 16384,
   "maxResponseContinuations": -1,
-  "goalCompletionCheck": true
+  "goalCompletionCheck": true,
+  "streamIdleTimeoutMs": 180000
 }

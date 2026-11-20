@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   if (values.effort) cfg.providers[cfg.provider].effort = parseEffort(values.effort);
   if (values.permission) cfg.permissionMode = mode(values.permission);
   if (command === 'models') {
-    const provider = new HttpProvider(cfg.providers[cfg.provider], cfg.requestTimeoutMs);
+    const provider = new HttpProvider(cfg.providers[cfg.provider], cfg.requestTimeoutMs, globalThis.fetch, cfg.streamIdleTimeoutMs);
     const models = await provider.models();
     print(models.join('\n') || t(cfg.language, 'noModels'));
     return;
@@ -230,7 +230,7 @@ async function main(): Promise<void> {
           case '/status': showStatus(db.get(session.id), tmpDir); break;
           case '/fallback':
           case '/model': {
-            const provider = new HttpProvider(cfg.providers[session.provider], cfg.requestTimeoutMs);
+            const provider = new HttpProvider(cfg.providers[session.provider], cfg.requestTimeoutMs, globalThis.fetch, cfg.streamIdleTimeoutMs);
             const models = await provider.models();
             if (!models.length) throw new Error(t(session.language, 'noModels'));
             const target = name === '/fallback' ? cfg.providers[session.provider].fallbackModel : argument;
@@ -247,7 +247,7 @@ async function main(): Promise<void> {
             if (!cfg.providers[selected]) throw new Error('Unknown provider.');
             const target = cfg.providers[selected];
             if (!target.model) {
-              const models = await new HttpProvider(target, cfg.requestTimeoutMs).models();
+              const models = await new HttpProvider(target, cfg.requestTimeoutMs, globalThis.fetch, cfg.streamIdleTimeoutMs).models();
               if (!models.length) throw new Error(t(session.language, 'noModels'));
               const model = await pick(models, session.language === 'ru' ? 'Модель' : 'Model');
               if (!model) break;

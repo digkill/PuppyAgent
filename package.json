@@ -1,6 +1,6 @@
 {
   "name": "puppy-agent",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "private": true,
   "type": "module",
   "description": "A friendly, persistent coding agent with a pack of helper puppies.",

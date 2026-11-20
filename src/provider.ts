@@ -1,12 +1,15 @@
 import type { Block, Completion, CompletionRequest, JsonObject, Message, IncompleteToolCall, Provider, ProviderConfig, RequestMetrics } from './types.ts';
 import { count, metricsFromResponse } from './usage.ts';
-import { sse } from './sse.ts';
+import { sse, StreamIdleTimeout } from './sse.ts';
 import { checkEffort, isArgolink, isKie, KIE_GEMINI_MODELS, routeProvider } from './provider-routing.ts';
 
 type Fetch = typeof globalThis.fetch;
 function clientRequestId(response: Response): string | null {
   const value = response.headers.get('x-client-request-id');
   return value && /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|req_[A-Za-z0-9_-]{1,100})$/i.test(value) ? value : null;
+}
+class RequestTimeout extends Error {
+  constructor(timeoutMs: number) { super(`Provider request exceeded ${timeoutMs} ms total. Set PUPPY_REQUEST_TIMEOUT_MS to adjust. Partial tools were not executed; use /continue to inspect and resume.`); }
 }
 class HttpFailure extends Error {
   clientRequestId: string | null;
@@ -67,8 +70,10 @@ export class HttpProvider implements Provider {
   config: ProviderConfig;
   timeoutMs: number;
   fetcher: Fetch;
-  constructor(config: ProviderConfig, timeoutMs = 120000, fetcher: Fetch = globalThis.fetch) {
-    this.config = routeProvider(config); this.timeoutMs = timeoutMs; this.fetcher = fetcher;
+  streamIdleTimeoutMs: number;
+  responseTimeouts = new WeakMap<Response, { signal: AbortSignal; deadline: AbortSignal }>();
+  constructor(config: ProviderConfig, timeoutMs = 900000, fetcher: Fetch = globalThis.fetch, streamIdleTimeoutMs = 180000) {
+    this.config = routeProvider(config); this.timeoutMs = timeoutMs; this.fetcher = fetcher; this.streamIdleTimeoutMs = streamIdleTimeoutMs;
   }
   async http(path: string, body?: unknown, signal?: AbortSignal, exactUrl?: string): Promise<Response> {
     const cfg = this.config;
@@ -78,16 +83,19 @@ export class HttpProvider implements Provider {
     if (cfg.auth === 'bearer') headers.authorization = `Bearer ${key}`;
     if (cfg.auth === 'x-api-key') headers['x-api-key'] = key!;
     if (cfg.protocol === 'anthropic') headers['anthropic-version'] = '2023-06-01';
-    const combined = AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(signal ? [signal] : [])]);
+    const deadline = AbortSignal.timeout(this.timeoutMs);
+    const combined = AbortSignal.any([deadline, ...(signal ? [signal] : [])]);
     let response: Response;
     try { response = await this.fetcher(exactUrl || `${cfg.baseUrl.replace(/\/$/, '')}/${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers,
       body: body === undefined ? undefined : JSON.stringify(body), signal: combined,
       redirect: 'error', // Never forward credentials to a redirected endpoint.
     }); } catch (error) {
+      if (deadline.aborted && !signal?.aborted) throw new RequestTimeout(this.timeoutMs);
       if (!combined.aborted && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(cfg.baseUrl).hostname)) throw new Error(`Local model server unavailable at ${new URL(cfg.baseUrl).host}. Start Ollama or LM Studio and check PUPPY_BASE_URL.`);
       throw error;
     }
+    this.responseTimeouts.set(response, { signal: combined, deadline });
     if (!response.ok) {
       // Provider bodies may echo secrets or full prompts. Do not persist or print them.
       let code = '';
@@ -123,7 +131,8 @@ export class HttpProvider implements Provider {
     const incompleteToolCalls: IncompleteToolCall[] = [];
     let streamed = false;
     let requestId: string | null = null;
-    const metrics = () => ({ ...metricsFromResponse(res, this.config.protocol, this.config.model, Math.round(performance.now() - started), streamed), clientRequestId: requestId });
+    let responseDeadline: AbortSignal | undefined;
+    const metrics = (): RequestMetrics => ({ ...metricsFromResponse(res, this.config.protocol, this.config.model, Math.round(performance.now() - started), streamed), clientRequestId: requestId });
     try {
     this.assertCompatible(req);
     if (!this.config.model || this.config.model.startsWith('REPLACE_')) throw new Error('Set an actual model ID in your provider config. Use: puppy models');
@@ -137,6 +146,7 @@ export class HttpProvider implements Provider {
         messages: anthropicHistory(req.messages),
         ...(req.tools.length ? { tools: req.tools } : {}),
       }, req.signal);
+      responseDeadline = this.responseTimeouts.get(raw)?.deadline;
       requestId = clientRequestId(raw);
       if (raw.headers.get('content-type')?.includes('text/event-stream')) {
         streamed = true;
@@ -163,6 +173,7 @@ export class HttpProvider implements Provider {
       messages: [{ role: 'system', content: req.system }, ...openAIHistory(this.config.supportsTools === false ? textOnlyHistory(req.messages) : req.messages)],
       ...(req.tools.length ? { tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
     }, req.signal);
+    responseDeadline = this.responseTimeouts.get(raw)?.deadline;
     requestId = clientRequestId(raw);
     if (raw.headers.get('content-type')?.includes('text/event-stream')) {
       streamed = true; await this.openAIStream(raw, req, res);
@@ -192,13 +203,17 @@ export class HttpProvider implements Provider {
     return { ...(incompleteToolCalls.length ? { incompleteToolCalls } : {}), message: { role: 'assistant', content }, inputTokens: mtr.usage.inputTokens ?? 0, outputTokens: mtr.usage.outputTokens ?? 0, stopReason: String(choice.finish_reason || ''), metrics: mtr };
     } catch (error) {
       if (error instanceof HttpFailure) requestId = error.clientRequestId;
-      throw new ProviderFailure((error as Error).message, metrics());
+      const m = metrics();
+      if (error instanceof StreamIdleTimeout) m.failureKind = 'stream-idle-timeout';
+      else if (error instanceof RequestTimeout || responseDeadline?.aborted && !req.signal?.aborted) { error = new RequestTimeout(this.timeoutMs); m.failureKind = 'request-timeout'; }
+      else if (req.signal?.aborted) m.failureKind = 'cancelled';
+      throw new ProviderFailure((error as Error).message, m);
     }
   }
   async openAIStream(raw: Response, req: CompletionRequest, result: JsonObject): Promise<void> {
     let text = '', refusal = '', reason = '', done = false;
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
-    for await (const record of sse(raw, req.signal)) {
+    for await (const record of sse(raw, this.responseTimeouts.get(raw)?.signal || req.signal, this.streamIdleTimeoutMs)) {
       if (record.event === 'done') { done = true; break; }
       const event = record.data;
       checkApiCode(event);
@@ -238,7 +253,7 @@ export class HttpProvider implements Provider {
   async anthropicStream(raw: Response, req: CompletionRequest, result: JsonObject, incompleteToolCalls: IncompleteToolCall[] = []): Promise<void> {
     const blocks = new Map<number, { block: JsonObject; json: string; stopped: boolean }>();
     let started = false, stopped = false;
-    for await (const record of sse(raw, req.signal)) {
+    for await (const record of sse(raw, this.responseTimeouts.get(raw)?.signal || req.signal, this.streamIdleTimeoutMs)) {
       const event = record.data, type = event.type || record.event;
       // Some gateways put billing information on their final event rather than message_start.
       if (event.credits_consumed !== undefined) result.credits_consumed = event.credits_consumed;

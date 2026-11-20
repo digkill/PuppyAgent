@@ -18,7 +18,7 @@ export const defaults: Config = {
   },
   tmpDir: '', dataDir: '~/.local/share/puppy-agent', permissionMode: 'ask',
   maxSteps: 40, maxPackCalls: 80, maxChildren: 6, maxParallelChildren: 3, maxDepth: 2,
-  maxOutputTokens: 16384, compactionMaxOutputTokens: 16384, maxResponseContinuations: 2, contextBudgetTokens: 128000, requestTimeoutMs: 120000,
+  maxOutputTokens: 16384, compactionMaxOutputTokens: 16384, maxResponseContinuations: 2, contextBudgetTokens: 128000, requestTimeoutMs: 900000, streamIdleTimeoutMs: 180000,
   commandTimeoutMs: 60000, maxToolOutputChars: 24000,
   instructions: '', instructionFiles: [],
 };
@@ -43,8 +43,11 @@ export function validateConfig(raw: unknown): Config {
   cfg.dataDir = expandPath(cfg.dataDir);
   if (!MODES.includes(cfg.permissionMode)) throw new Error('Invalid permissionMode.');
   if (!Array.isArray(cfg.instructionFiles) || cfg.instructionFiles.some(p => typeof p !== 'string')) throw new Error('Invalid instructionFiles.');
-  for (const key of ['maxSteps', 'maxPackCalls', 'maxChildren', 'maxParallelChildren', 'maxDepth', 'maxOutputTokens', 'compactionMaxOutputTokens', 'contextBudgetTokens', 'requestTimeoutMs', 'commandTimeoutMs', 'maxToolOutputChars'] as const) {
+  for (const key of ['maxSteps', 'maxPackCalls', 'maxChildren', 'maxParallelChildren', 'maxDepth', 'maxOutputTokens', 'compactionMaxOutputTokens', 'contextBudgetTokens', 'requestTimeoutMs', 'streamIdleTimeoutMs', 'commandTimeoutMs', 'maxToolOutputChars'] as const) {
     if (!Number.isSafeInteger(cfg[key]) || cfg[key] < 1) throw new Error(`config.${key} must be a positive integer.`);
+  }
+  for (const key of ['requestTimeoutMs', 'streamIdleTimeoutMs', 'commandTimeoutMs'] as const) {
+    if (cfg[key] > 2147483647) throw new Error(`config.${key} must be at most 2147483647 ms.`);
   }
   if (!Number.isSafeInteger(cfg.maxResponseContinuations) || cfg.maxResponseContinuations < -1 || cfg.maxResponseContinuations > 8) throw new Error('maxResponseContinuations must be an integer from -1 to 8 (-1 follows the task budget).');
   if (cfg.contextBudgetTokens < cfg.maxOutputTokens * 2) throw new Error('contextBudgetTokens must be at least twice maxOutputTokens.');
@@ -130,6 +133,9 @@ export function environmentDefaults(config: Config): Config {
   if (process.env.PUPPY_BASE_URL !== undefined) { selected.baseUrl = process.env.PUPPY_BASE_URL; delete selected.modelsUrl; }
   if (process.env.PUPPY_STREAM !== undefined) selected.stream = envBoolean('PUPPY_STREAM');
   if (process.env.PUPPY_GOAL_CHECK !== undefined) cfg.goalCompletionCheck = envBoolean('PUPPY_GOAL_CHECK');
+  if (process.env.PUPPY_REQUEST_TIMEOUT_MS !== undefined) cfg.requestTimeoutMs = Number(process.env.PUPPY_REQUEST_TIMEOUT_MS);
+  if (process.env.PUPPY_STREAM_IDLE_TIMEOUT_MS !== undefined) cfg.streamIdleTimeoutMs = Number(process.env.PUPPY_STREAM_IDLE_TIMEOUT_MS);
+  if (process.env.PUPPY_COMMAND_TIMEOUT_MS !== undefined) cfg.commandTimeoutMs = Number(process.env.PUPPY_COMMAND_TIMEOUT_MS);
   if (process.env.PUPPY_MAX_PACK_CALLS !== undefined) cfg.maxPackCalls = Number(process.env.PUPPY_MAX_PACK_CALLS);
   if (process.env.PUPPY_MAX_STEPS !== undefined) cfg.maxSteps = Number(process.env.PUPPY_MAX_STEPS);
   if (process.env.PUPPY_MEMORY !== undefined) cfg.conversationMemory = envBoolean('PUPPY_MEMORY');
